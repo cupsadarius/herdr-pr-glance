@@ -39,14 +39,25 @@ type Model struct {
 	SummaryLoading             bool
 	SummaryError, SourceError  error
 	NextSummary, CooldownUntil time.Time
-	resolver                   SourceResolver
-	github                     GitHub
-	cache                      Cache
-	now                        func() time.Time
-	ctx                        context.Context
-	cancel                     context.CancelFunc
-	resolving                  bool
-	failures                   int
+	// Width and Height come from tea.WindowSizeMsg; Cursor selects a body item
+	// and Offset scrolls the body. Expanded is keyed by review-thread ID so an
+	// expansion survives a refresh that replaces the thread value.
+	Width, Height  int
+	Cursor, Offset int
+	Expanded       map[string]bool
+	// Open and Zoom are host actions injected by the launcher; nil means no-op.
+	Open        func(url string) error
+	Zoom        func() error
+	ActionError error
+	resolver    SourceResolver
+	github      GitHub
+	cache       Cache
+	now         func() time.Time
+	ctx         context.Context
+	cancel      context.CancelFunc
+	rows        []rowTarget
+	resolving   bool
+	failures    int
 }
 
 // New constructs a model. The clock must be safe to call from commands.
@@ -55,10 +66,9 @@ func New(r SourceResolver, g GitHub, c Cache, now func() time.Time) *Model {
 		now = time.Now
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Model{resolver: r, github: g, cache: c, now: now, ctx: ctx, cancel: cancel, Section: model.Overview, Discussions: map[model.Section]*DiscussionState{}}
+	return &Model{resolver: r, github: g, cache: c, now: now, ctx: ctx, cancel: cancel, Section: model.Overview, Discussions: map[model.Section]*DiscussionState{}, Expanded: map[string]bool{}}
 }
-func (m *Model) Init() tea.Cmd  { return func() tea.Msg { return TickMsg{} } }
-func (m *Model) View() tea.View { return tea.NewView("Glance PR") }
+func (m *Model) Init() tea.Cmd { return func() tea.Msg { return TickMsg{} } }
 func (m *Model) SummaryStale() bool {
 	return m.SummaryError != nil || (!m.Snapshot.FetchedAt.IsZero() && m.now().Sub(m.Snapshot.FetchedAt) >= time.Minute)
 }

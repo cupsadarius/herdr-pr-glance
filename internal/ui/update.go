@@ -21,6 +21,8 @@ func (m *Model) reset() {
 	m.SummaryError = nil
 	m.NextSummary = time.Time{}
 	m.failures = 0
+	m.Cursor, m.Offset = 0, 0
+	m.Expanded = map[string]bool{}
 }
 func (m *Model) rateLimit(err error) {
 	var e *model.FetchError
@@ -36,6 +38,17 @@ func (m *Model) rateLimit(err error) {
 }
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch x := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.Width, m.Height = x.Width, x.Height
+		m.clamp()
+	case tea.KeyPressMsg:
+		return m, m.handleKey(x)
+	case tea.MouseClickMsg:
+		return m, m.handleMouse(x.Mouse())
+	case tea.MouseWheelMsg:
+		return m, m.handleMouse(x.Mouse())
+	case ActionErrMsg:
+		m.ActionError = x.Err
 	case TickMsg:
 		return m, tea.Batch(m.resolve(), tea.Tick(2*time.Second, func(time.Time) tea.Msg { return TickMsg{} }))
 	case SourceResult:
@@ -82,7 +95,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Generation++
 			m.Discussions = map[model.Section]*DiscussionState{}
 			m.Section = model.Overview
+			m.Cursor, m.Offset = 0, 0
+			m.Expanded = map[string]bool{}
 		}
+		m.clamp()
 	case CacheResult:
 		if x.Generation != m.Generation {
 			return m, nil
@@ -101,6 +117,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			data.FetchedAt = x.Entry.FetchedAt
 			d.Data = &data
 		}
+		m.clamp()
 		if !refresh && !m.DiscussionStale(x.Section) {
 			return m, nil
 		}
@@ -120,6 +137,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		d.Data = &x.Data
+		m.clamp()
 		// Serialize persistence with source acceptance. A command may finish after
 		// cancellation, so writing before this generation guard can corrupt a newer
 		// cache entry even when the visible result is subsequently discarded.
@@ -137,6 +155,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.Section = s
+		m.Cursor, m.Offset = 0, 0
 		return m, m.discussion(s, true)
 	case RefreshMsg:
 		if m.Section == model.Overview {
