@@ -40,6 +40,10 @@ Runtime:
 - Herdr 0.8.2 or newer
 - `git`
 - `gh`, authenticated (`gh auth login`)
+- `HERDR_PLUGIN_STATE_DIR`, which Herdr sets for plugin commands. The `view` and
+  `open` subcommands require it and exit with a clear error if it is missing, so
+  run them through Herdr rather than directly. `snapshot --cwd PATH` needs no
+  Herdr environment and works anywhere.
 
 Installation needs all of the above — the hook downloads release assets with
 `gh`, so `gh` must already be authenticated — plus a POSIX shell, `tar`, `gzip`
@@ -125,10 +129,12 @@ Only the up and down arrows are bound; left and right do nothing.
 
 ### Refresh behaviour
 
-- The working pane, checkout and branch are re-resolved locally every 2 seconds
-  while the pane is visible, so pane and branch switches show up quickly.
-- The Overview summary refreshes automatically every 60 seconds while the pane
-  is visible. Polling is suspended while the tab is hidden.
+- Local Herdr and git checks — working pane, checkout and branch — run every
+  2 seconds for as long as Glance is open, whether or not its tab is visible,
+  so pane and branch switches show up quickly.
+- The Overview summary is polled from GitHub every 60 seconds, and only while
+  the tab is visible. Polling is suspended while the tab is hidden and resumes,
+  with a freshness check, when it becomes visible again.
 - Comments and Reviews are never fetched automatically. They load when you open
   the section, or when you press `r`.
 - Cached discussions are considered fresh for 5 minutes. Opening a section with
