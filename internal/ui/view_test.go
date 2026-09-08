@@ -170,6 +170,29 @@ func TestStackBlockListsEntriesTopFirstAndMarksTheCurrentOne(t *testing.T) {
 	}
 }
 
+func TestStackHeadingWithoutAKnownPosition(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Snapshot.StackPosition = 0
+	if !strings.Contains(plainView(m), "STACK #3710 · ?/3 · base main") {
+		t.Fatalf("an unknown position must not read as zero:\n%s", plainView(m))
+	}
+}
+
+func TestCursorOnTheShownEntryShowsOneMarker(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	m.Cursor = 1 // the shown entry, second row from the top of the stack
+	row := ansi.Strip(stackRowLine(t, m.View().Content, "#3630"))
+	if !strings.HasPrefix(row, "›") {
+		t.Fatalf("the cursor must still be marked: %q", row)
+	}
+	if strings.HasPrefix(row, "››") || []rune(row)[1] == '›' {
+		t.Fatalf("the cursor and the shown entry must not both draw a marker: %q", row)
+	}
+}
+
 func TestStackRowsCarryStateColors(t *testing.T) {
 	m, now := viewHarness()
 	stackFixture(m, *now)
@@ -195,6 +218,11 @@ func TestStackFooterHint(t *testing.T) {
 	if !strings.Contains(plainView(m), "[ ] stack") {
 		t.Fatalf("a stacked pull request must advertise its keys:\n%s", plainView(m))
 	}
+	m.Width = 45
+	if plain := plainView(m); !strings.Contains(plain, "[ ] stack") || !strings.Contains(plain, "q close") {
+		t.Fatalf("the stack keys must survive the default width:\n%s", plain)
+	}
+	m.Width = 100
 	m.Snapshot.Stack, m.Snapshot.StackPosition = nil, 0
 	plain := plainView(m)
 	if strings.Contains(plain, "[ ] stack") || strings.Contains(plain, "STACK") {

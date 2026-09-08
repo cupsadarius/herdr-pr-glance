@@ -34,15 +34,16 @@ type footerHint struct {
 // is dropped when the pane is too narrow to list them all.
 var footerHints = []footerHint{{"r refresh", 2}, {"o browser", 3}, {"z zoom", 1}, {"q close", 0}}
 
-// stackHint is only offered while the pull request is stacked, and is the
-// first hint dropped when the pane cannot list them all.
-var stackHint = footerHint{"[ ] stack", 4}
+// stackedHints replace the list while the pull request is stacked: the stack
+// keys are the ones a reader cannot guess, so they outlive zoom and only the
+// browser and refresh hints are shed before them.
+var stackedHints = []footerHint{{"[ ] stack", 1}, {"r refresh", 3}, {"o browser", 4}, {"z zoom", 2}, {"q close", 0}}
 
 // footerLine fits as many control hints as the width allows, closing last.
 func footerLine(w int, stacked bool) string {
 	hints := footerHints
 	if stacked {
-		hints = append([]footerHint{stackHint}, hints...)
+		hints = stackedHints
 	}
 	for {
 		texts := make([]string, len(hints))
@@ -399,8 +400,6 @@ func reviewDecision(s string) string {
 	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
-// body returns the non-selectable lead lines and the selectable items of the
-// active section, laid out for the given content width.
 // body returns the lead lines, the selectable items and the trailing lines of
 // the active section, laid out for the given content width.
 func (m *Model) body(w int) ([]string, []bodyItem, []string) {
@@ -443,13 +442,15 @@ func (m *Model) stackBody(w int) ([]string, []bodyItem, []string) {
 		return nil, nil, nil
 	}
 	heading := []span{{text: "STACK", style: pal.bold},
-		{text: fmt.Sprintf(" #%d · %d/%d · base %s", s.Stack.Number, s.StackPosition, s.Stack.Size, clean(s.Stack.BaseBranch)), style: pal.faint}}
+		{text: fmt.Sprintf(" #%d · %s/%d · base %s", s.Stack.Number, position(s.StackPosition), s.Stack.Size, clean(s.Stack.BaseBranch)), style: pal.faint}}
 	lead := []string{truncateSpans(heading, w)}
 	items := make([]bodyItem, 0, len(s.Stack.Entries))
 	for i := len(s.Stack.Entries) - 1; i >= 0; i-- {
 		e := s.Stack.Entries[i]
 		pin := e.PR
-		items = append(items, bodyItem{lines: []string{m.stackRow(e, w)}, url: e.PR.URL, pin: &pin})
+		// The cursor gutter already points at the row it selects, so the entry
+		// marker stands down there rather than drawing a second arrow.
+		items = append(items, bodyItem{lines: []string{m.stackRow(e, w, m.Cursor == len(items))}, url: e.PR.URL, pin: &pin})
 	}
 	var gap []string
 	if hidden := s.Stack.Size - len(s.Stack.Entries); hidden > 0 {
@@ -460,10 +461,13 @@ func (m *Model) stackBody(w int) ([]string, []bodyItem, []string) {
 
 // stackRow shows one entry: its number, a dot coloured by its lifecycle, its
 // title and its review decision. The entry currently displayed is marked.
-func (m *Model) stackRow(e model.StackEntry, w int) string {
+func (m *Model) stackRow(e model.StackEntry, w int, selected bool) string {
 	marker, own := "  ", pal.none
 	if m.showsEntry(e) {
-		marker, own = "› ", pal.bold
+		own = pal.bold
+		if !selected {
+			marker = "› "
+		}
 	}
 	row := []span{{text: marker, style: pal.bold},
 		{text: "#" + strconv.Itoa(e.PR.Number), style: own},
@@ -483,6 +487,14 @@ func (m *Model) showsEntry(e model.StackEntry) bool {
 		return true
 	}
 	return m.Snapshot.StackPosition == e.Position
+}
+
+// position reads an unknown stack position as unknown rather than as zero.
+func position(p int) string {
+	if p < 1 {
+		return "?"
+	}
+	return strconv.Itoa(p)
 }
 
 func entryState(e model.StackEntry) string {

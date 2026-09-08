@@ -19,8 +19,10 @@ const discoveryFields = "id,url,number,title,author,state,isDraft,baseRefName,he
 // Both fields are null for a pull request that belongs to no stack, and the
 // entry page is deliberately not followed: Size records the real total.
 const stackEntries = 50
-const stackFields = `stackEntry{position} stack{number size baseRefName entries(first:50){nodes{position pullRequest{id number url title state isDraft headRefName baseRefName reviewDecision}}}}`
-const checksQuery = `query($id:ID!,$cursor:String){node(id:$id){... on PullRequest{` + stackFields + ` commits(last:1){totalCount nodes{commit{statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{name status conclusion detailsUrl} ... on StatusContext{context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}}}`
+
+var stackFields = `stackEntry{position} stack{number size baseRefName entries(first:` + strconv.Itoa(stackEntries) +
+	`){nodes{position pullRequest{id number url title state isDraft headRefName baseRefName reviewDecision}}}}`
+var checksQuery = `query($id:ID!,$cursor:String){node(id:$id){... on PullRequest{` + stackFields + ` commits(last:1){totalCount nodes{commit{statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{name status conclusion detailsUrl} ... on StatusContext{context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}}}`
 
 // Snapshot reports the pull request of the source checkout's branch.
 func (c Client) Snapshot(ctx context.Context, source model.Source) (model.Snapshot, error) {
@@ -142,11 +144,7 @@ func (c Client) snapshot(ctx context.Context, cwd string, discoveryArgs ...strin
 				result.StackPosition = response.Node.StackEntry.Position
 			}
 			if response.Node.Stack != nil {
-				stack, err := normalizeStack(*response.Node.Stack)
-				if err != nil {
-					return model.Snapshot{}, err
-				}
-				result.Stack = stack
+				result.Stack = normalizeStack(*response.Node.Stack)
 			}
 		}
 		commits := response.Node.Commits
@@ -227,25 +225,29 @@ type stackNode struct {
 	}
 }
 
-func normalizeStack(n stackNode) (*model.Stack, error) {
+// normalizeStack keeps the entries it can identify. An entry GitHub cannot
+// resolve — a null pull request node in a partial result — is cosmetic next to
+// the checks and counts of the summary, so it is skipped rather than failing
+// the whole snapshot; Size still counts it.
+func normalizeStack(n stackNode) *model.Stack {
 	stack := &model.Stack{Number: n.Number, Size: n.Size, BaseBranch: n.BaseRefName}
 	for _, e := range n.Entries.Nodes {
 		identity, err := parseIdentity(e.PullRequest.URL, e.PullRequest.ID, e.PullRequest.Number)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		stack.Entries = append(stack.Entries, model.StackEntry{Position: e.Position, PR: identity,
 			Title: e.PullRequest.Title, State: e.PullRequest.State, HeadBranch: e.PullRequest.HeadRefName,
 			BaseBranch: e.PullRequest.BaseRefName, ReviewDecision: e.PullRequest.ReviewDecision, Draft: e.PullRequest.IsDraft})
 	}
+	sort.SliceStable(stack.Entries, func(i, j int) bool { return stack.Entries[i].Position < stack.Entries[j].Position })
 	if len(stack.Entries) > stackEntries {
 		stack.Entries = stack.Entries[:stackEntries]
 	}
-	sort.SliceStable(stack.Entries, func(i, j int) bool { return stack.Entries[i].Position < stack.Entries[j].Position })
 	if stack.Size < len(stack.Entries) {
 		stack.Size = len(stack.Entries)
 	}
-	return stack, nil
+	return stack
 }
 
 type checkNode struct {

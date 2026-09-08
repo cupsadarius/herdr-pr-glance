@@ -124,6 +124,27 @@ func TestStackLargerThanOnePageKeepsItsSize(t *testing.T) {
 	}
 }
 
+func TestUnresolvableStackEntryIsSkipped(t *testing.T) {
+	stack := stackJSON(3710, 3,
+		entryJSON(3, 3709, "top change", "OPEN", "feature/bottom", "feature/top", "", false),
+		`{"position":2,"pullRequest":null}`,
+		entryJSON(1, 3705, "bottom change", "OPEN", "main", "feature/bottom", "", false))
+	r := &fixtureRunner{t: t, replies: []reply{{out: discovery("github.com", "o/r", "OPEN", false)}, {out: pageWith(stack, `[]`, false, "")}}}
+	got, err := (Client{Runner: r}).Snapshot(context.Background(), model.Source{CWD: "/source"})
+	if err != nil {
+		t.Fatalf("an unresolvable stack entry must not fail the summary: %v", err)
+	}
+	if got.PR == nil || got.Commits != 143 || got.Stack == nil {
+		t.Fatalf("snapshot incomplete: %+v", got)
+	}
+	if got.Stack.Size != 3 || len(got.Stack.Entries) != 2 {
+		t.Fatalf("stack=%+v", *got.Stack)
+	}
+	if got.Stack.Entries[0].PR.Number != 3705 || got.Stack.Entries[1].PR.Number != 3709 {
+		t.Fatalf("entries=%+v", got.Stack.Entries)
+	}
+}
+
 func TestSnapshotPRDiscoversByNumber(t *testing.T) {
 	stack := stackJSON(3710, 2,
 		entryJSON(2, 3709, "top change", "OPEN", "feature/bottom", "feature/top", "", false),

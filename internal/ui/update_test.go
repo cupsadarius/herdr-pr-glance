@@ -560,3 +560,51 @@ func TestPinningResetsSectionAndDiscussions(t *testing.T) {
 			m.Section, len(m.Discussions), gen, m.Generation)
 	}
 }
+
+func TestPinWhileASummaryIsInFlight(t *testing.T) {
+	m, a, now := stackedHarness(t)
+	*now = now.Add(time.Minute)
+	stale := source(m, "main", true)
+	if !m.SummaryLoading || stale == nil {
+		t.Fatal("no summary in flight")
+	}
+
+	finish(m, m.pinPR(pinnedPR))
+
+	if len(a.pinned) != 1 || m.Snapshot.PR == nil || *m.Snapshot.PR != pinnedPR {
+		t.Fatalf("pinning must fetch the pinned pull request: pinned=%+v shown=%+v", a.pinned, m.Snapshot.PR)
+	}
+	finish(m, apply(m, stale()))
+	if *m.Snapshot.PR != pinnedPR || m.Pinned == nil {
+		t.Fatalf("the in-flight branch result must be dropped, shown %+v", m.Snapshot.PR)
+	}
+}
+
+func TestPinDuringCooldownIsDueAtTheNextTick(t *testing.T) {
+	m, a, now := stackedHarness(t)
+	m.CooldownUntil = now.Add(30 * time.Second)
+	if cmd := m.pinPR(pinnedPR); cmd != nil {
+		t.Fatal("a rate-limit cooldown must suppress the pinned fetch")
+	}
+	if m.Pinned == nil || !m.NextSummary.IsZero() {
+		t.Fatalf("a pin that could not fetch must be due immediately: pin=%+v next=%v", m.Pinned, m.NextSummary)
+	}
+	*now = now.Add(31 * time.Second)
+	finish(m, source(m, "main", true))
+	if len(a.pinned) != 1 || a.pinned[0] != pinnedPR {
+		t.Fatalf("the tick after the cooldown must fetch the pinned pull request: %+v", a.pinned)
+	}
+}
+
+func TestPinningTheBranchPullRequestUnpins(t *testing.T) {
+	m, a, _ := stackedHarness(t)
+	branch := *m.Snapshot.PR
+	finish(m, m.pinPR(pinnedPR))
+	finish(m, m.pinPR(branch))
+	if m.Pinned != nil {
+		t.Fatalf("selecting the branch's own entry must unpin: %+v", m.Pinned)
+	}
+	if len(a.pinned) != 1 || m.Snapshot.PR == nil || *m.Snapshot.PR != branch {
+		t.Fatalf("unpinning must refetch through Snapshot: pinned=%+v shown=%+v", a.pinned, m.Snapshot.PR)
+	}
+}

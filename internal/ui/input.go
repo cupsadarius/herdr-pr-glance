@@ -2,6 +2,7 @@ package ui
 
 import (
 	"net/url"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
@@ -72,14 +73,22 @@ func (m *Model) stackStep(delta int) tea.Cmd {
 }
 
 // pinPR shows another pull request of the stack instead of the branch's own,
-// and refreshes immediately; the shown one is already pinned enough.
+// and refreshes immediately; the shown one is already pinned enough, and the
+// branch's own is what unpinning means.
 func (m *Model) pinPR(pr model.PR) tea.Cmd {
 	if m.Snapshot.PR != nil && *m.Snapshot.PR == pr {
 		return nil
 	}
+	if m.branchPR != nil && *m.branchPR == pr {
+		return m.unpin()
+	}
+	if m.Pinned == nil && m.Snapshot.PR != nil {
+		own := *m.Snapshot.PR
+		m.branchPR = &own
+	}
 	pin := pr
 	m.Pinned = &pin
-	return m.summary(true)
+	return m.repin()
 }
 
 // unpin returns to the pull request of the working branch.
@@ -87,7 +96,17 @@ func (m *Model) unpin() tea.Cmd {
 	if m.Pinned == nil {
 		return nil
 	}
-	m.Pinned = nil
+	m.Pinned, m.branchPR = nil, nil
+	return m.repin()
+}
+
+// repin refreshes after the reader changed which pull request is shown. The
+// work in flight is for the previous one, and clearing the schedule makes the
+// next tick fetch even when this call cannot: a summary already running, or a
+// rate-limit cooldown, must not leave a pinned header over branch data.
+func (m *Model) repin() tea.Cmd {
+	m.switchPR()
+	m.NextSummary = time.Time{}
 	return m.summary(true)
 }
 

@@ -63,6 +63,9 @@ type Model struct {
 	cancel    context.CancelFunc
 	resolving bool
 	failures  int
+	// branchPR remembers the working branch's own pull request while another
+	// entry of its stack is pinned, so selecting it again unpins.
+	branchPR *model.PR
 }
 
 // New constructs a model. The clock must be safe to call from commands.
