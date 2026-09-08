@@ -45,10 +45,16 @@ func (r *scriptedRunner) Run(_ context.Context, cwd string, args ...string) (str
 			return r.responses[prefix], err
 		}
 	}
-	for prefix, out := range r.responses {
-		if strings.HasPrefix(line, prefix) {
-			return out, nil
+	// The longest matching prefix wins, so a test can answer one specific
+	// `pane layout --pane X` differently from every other layout call.
+	best, found := "", false
+	for prefix := range r.responses {
+		if strings.HasPrefix(line, prefix) && (!found || len(prefix) > len(best)) {
+			best, found = prefix, true
 		}
+	}
+	if found {
+		return r.responses[best], nil
 	}
 	return "", errors.New("unexpected command: " + line)
 }
@@ -99,8 +105,11 @@ func splitRunner(t *testing.T, layout string) *scriptedRunner {
 		"api snapshot":      body(t, "snapshot.json"),
 		"plugin pane open":  body(t, "pane-open.json"),
 		"plugin pane focus": `{"id":"fixture","result":{"type":"plugin_pane_focused","plugin_pane":{"plugin_id":"glance.pr","entrypoint":"view","pane":{"pane_id":"w1:p2"}}}}`,
-		"pane layout":       body(t, layout),
-		"pane resize":       `{"id":"fixture","result":{}}`,
+		// The invoking pane is the whole tab unless a test says otherwise, so
+		// Glance splits it and the recorded argv stays the simple case.
+		"pane layout --pane w1:p1": body(t, "layout-single.json"),
+		"pane layout":              body(t, layout),
+		"pane resize":              `{"id":"fixture","result":{}}`,
 	}}
 }
 
@@ -523,5 +532,64 @@ func TestRecordedPaneOwnership(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Glance belongs in the rightmost column of the tab, so Open splits the pane on
+// the right edge rather than the invoking pane.
+func TestOpenTargetsTheRightmostPane(t *testing.T) {
+	for _, c := range []struct{ layout, want string }{
+		{"layout-right-column.json", "w1:p2"},  // a single full-height column
+		{"layout-right-stacked.json", "w1:p2"}, // stacked: the taller pane
+		{"layout-right-tie.json", "w1:p2"},     // equal heights: the topmost
+		{"layout-right-glance.json", "w1:p3"},  // a recorded Glance pane is skipped
+	} {
+		r := splitRunner(t, "layout.json")
+		r.responses["pane layout --pane w1:p1"] = body(t, c.layout)
+		l := launcher(t, r)
+		if err := os.WriteFile(filepath.Join(l.StateDir, "overlays.json"), []byte(`["w1:p6"]`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Open(context.Background()); err != nil {
+			t.Fatalf("%s: %v", c.layout, err)
+		}
+		want := []string{"/herdr path/custom", "plugin", "pane", "open", "--plugin", "glance.pr", "--entrypoint", "view",
+			"--placement", "split", "--direction", "right", "--target-pane", c.want, "--focus"}
+		if got := r.find("plugin pane open"); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("%s: open argv = %q, want %q", c.layout, got, want)
+		}
+		if got := r.find("pane layout"); strings.Join(got[1:], " ") != "pane layout --pane w1:p1" {
+			t.Fatalf("%s: first layout call = %q", c.layout, got)
+		}
+	}
+}
+
+func TestOpenFallsBackToTheInvokingPane(t *testing.T) {
+	// A layout that cannot be read leaves the invoking pane as the target, and
+	// warns once without failing the action.
+	r := splitRunner(t, "layout.json")
+	r.failures = map[string]error{"pane layout --pane w1:p1": errors.New("boom")}
+	l := launcher(t, r)
+	var warnings []error
+	l.Warn = func(err error) { warnings = append(warnings, err) }
+	if err := l.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.find("plugin pane open"); got[13] != "w1:p1" {
+		t.Fatalf("open argv = %q, want the invoking pane", got)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one", warnings)
+	}
+
+	// So does a layout with no pane on the right edge of the area.
+	r = splitRunner(t, "layout.json")
+	r.responses["pane layout --pane w1:p1"] = `{"result":{"layout":{"area":{"x":0,"y":0,"width":200,"height":50},` +
+		`"panes":[{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":99,"height":50}}],"splits":[]}}}`
+	if err := launcher(t, r).Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.find("plugin pane open"); got[13] != "w1:p1" {
+		t.Fatalf("open argv = %q, want the invoking pane", got)
 	}
 }

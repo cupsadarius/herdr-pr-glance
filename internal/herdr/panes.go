@@ -133,9 +133,9 @@ func (l *Launcher) Open(ctx context.Context) error {
 		l.warn(l.writeRecords(records))
 	}
 	args := []string{"--placement", "split", "--direction", "right"}
-	switch {
-	case l.TargetPaneID != "":
-		args = append(args, "--target-pane", l.TargetPaneID)
+	switch target := l.splitTarget(ctx, glancePanes(records, overlays)); {
+	case target != "":
+		args = append(args, "--target-pane", target)
 	case l.WorkspaceID != "":
 		args = append(args, "--workspace", l.WorkspaceID)
 	}
@@ -173,6 +173,18 @@ func (l *Launcher) focusRecorded(ctx context.Context, pane string) (bool, error)
 		return false, fmt.Errorf("Herdr pane focus response missing or mismatched ownership")
 	}
 	return info.PluginID == pluginID && info.Entrypoint == viewEntrypoint, nil
+}
+
+// glancePanes is the set of pane IDs the launcher has recorded as its own.
+func glancePanes(records map[string]string, overlays []string) map[string]bool {
+	set := make(map[string]bool, len(records)+len(overlays))
+	for _, id := range records {
+		set[id] = true
+	}
+	for _, id := range overlays {
+		set[id] = true
+	}
+	return set
 }
 
 // liveRecord returns the recorded pane only while the session still shows it in
@@ -411,22 +423,71 @@ func (l *Launcher) prune(records map[string]string, overlays []string, live []Pa
 	return err
 }
 
+// paneLayout reads the tab geometry around one pane.
+func (l *Launcher) paneLayout(ctx context.Context, pane string) (*layout, error) {
+	out, err := l.run(ctx, "pane", "layout", "--pane", pane)
+	if err != nil {
+		return nil, err
+	}
+	var envelope layoutEnvelope
+	if err = json.Unmarshal([]byte(out), &envelope); err != nil {
+		return nil, fmt.Errorf("decode Herdr pane layout: %w", err)
+	}
+	if envelope.Error != nil {
+		return nil, fmt.Errorf("Herdr %s: %s", envelope.Error.Code, envelope.Error.Message)
+	}
+	if envelope.Result.Layout == nil {
+		return nil, fmt.Errorf("Herdr pane layout response missing layout")
+	}
+	return envelope.Result.Layout, nil
+}
+
+// splitTarget picks the pane to split so that Glance becomes the tab's
+// rightmost column. Herdr 0.8.2 cannot insert a column beside an existing split
+// without rebuilding the tab, so the best available placement is the right edge
+// of the layout: the full-height pane there when the column holds one pane,
+// otherwise its tallest (topmost on a tie) pane. Recorded Glance panes are never
+// split, and any geometry failure falls back to the invoking pane.
+func (l *Launcher) splitTarget(ctx context.Context, glance map[string]bool) string {
+	if l.TargetPaneID == "" {
+		return ""
+	}
+	geometry, err := l.paneLayout(ctx, l.TargetPaneID)
+	if err != nil {
+		l.warn(err)
+		return l.TargetPaneID
+	}
+	edge := geometry.Area.X + geometry.Area.Width
+	best, found := layoutPane{}, false
+	for _, p := range geometry.Panes {
+		if glance[p.PaneID] || p.Rect.X+p.Rect.Width != edge {
+			continue
+		}
+		if p.Rect.Height == geometry.Area.Height {
+			return p.PaneID
+		}
+		if !found || p.Rect.Height > best.Rect.Height || (p.Rect.Height == best.Rect.Height && p.Rect.Y < best.Rect.Y) {
+			best, found = p, true
+		}
+	}
+	if !found {
+		return l.TargetPaneID
+	}
+	return best.PaneID
+}
+
 // resize nudges the new split toward targetColumns. The pane is already open,
 // so every geometry failure is skipped silently rather than reported.
 func (l *Launcher) resize(ctx context.Context, pane string) {
-	out, err := l.run(ctx, "pane", "layout", "--pane", pane)
+	geometry, err := l.paneLayout(ctx, pane)
 	if err != nil {
 		return
 	}
-	var envelope layoutEnvelope
-	if json.Unmarshal([]byte(out), &envelope) != nil || envelope.Error != nil || envelope.Result.Layout == nil {
-		return
-	}
-	current, ok := envelope.Result.Layout.pane(pane)
+	current, ok := geometry.pane(pane)
 	if !ok {
 		return
 	}
-	split, ok := envelope.Result.Layout.containing(current)
+	split, ok := geometry.containing(current)
 	if !ok || split.Rect.Width-targetColumns < minWorkingColumns {
 		return
 	}
