@@ -24,6 +24,9 @@ type scriptedRunner struct {
 	responses map[string]string
 	failures  map[string]error
 	calls     [][]string
+	// before runs just ahead of the answer, so a test can change the filesystem
+	// between two steps of one launcher call.
+	before func(line string)
 }
 
 func (r *scriptedRunner) Run(_ context.Context, cwd string, args ...string) (string, error) {
@@ -32,6 +35,9 @@ func (r *scriptedRunner) Run(_ context.Context, cwd string, args ...string) (str
 		return "", errors.New("launcher must not choose a working directory")
 	}
 	line := strings.Join(args[1:], " ")
+	if r.before != nil {
+		r.before(line)
+	}
 	for prefix, err := range r.failures {
 		if strings.HasPrefix(line, prefix) {
 			return "", err
@@ -217,40 +223,66 @@ func TestResizeGrowsThePaneAndCapsEachCall(t *testing.T) {
 }
 
 func TestRecordFailuresDoNotFailTheAction(t *testing.T) {
-	// A read-only state directory: the record can be read but never written.
-	unwritable := func(t *testing.T, contents string) string {
+	// Both cases must fail for any uid, root included, so they rely on structure
+	// rather than permissions: a state directory whose parent is a regular file
+	// can never be created or written.
+	blocked := func(t *testing.T) string {
 		t.Helper()
 		dir := t.TempDir()
-		if contents != "" {
-			if err := os.WriteFile(filepath.Join(dir, "panes.json"), []byte(contents), 0600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := os.Chmod(dir, 0500); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "blocker"), []byte("x"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { os.Chmod(dir, 0700) })
-		return dir
+		return filepath.Join(dir, "blocker", "state")
 	}
-	// A stale record warns twice: once dropping it, once recording the new pane.
-	for contents, wantWarnings := range map[string]int{"": 1, `{"w1:t1":"w1:gone"}`: 2} {
-		r := splitRunner(t, "layout.json")
-		l := launcher(t, r)
-		l.StateDir = unwritable(t, contents)
-		var warnings []error
-		l.Warn = func(err error) { warnings = append(warnings, err) }
-		if err := l.Open(context.Background()); err != nil {
-			t.Fatalf("%q: %v", contents, err)
+
+	// A fresh open whose record cannot be written: one warning, pane still sized.
+	r := splitRunner(t, "layout.json")
+	l := launcher(t, r)
+	l.StateDir = blocked(t)
+	var warnings []error
+	l.Warn = func(err error) { warnings = append(warnings, err) }
+	if err := l.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.find("plugin pane open") == nil || r.find("pane resize") == nil {
+		t.Fatalf("record failure changed the launch: %q", r.calls)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one", warnings)
+	}
+
+	// A stale record read successfully but impossible to drop: the launcher warns
+	// for the drop and for the new record, and still opens and sizes a pane. The
+	// state directory turns into a regular file while the snapshot is fetched.
+	r = splitRunner(t, "layout.json")
+	l = launcher(t, r)
+	warnings = nil
+	l.Warn = func(err error) { warnings = append(warnings, err) }
+	if err := os.WriteFile(filepath.Join(l.StateDir, "panes.json"), []byte(`{"w1:t1":"w1:gone"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r.before = func(line string) {
+		if !strings.HasPrefix(line, "api snapshot") {
+			return
 		}
-		if r.find("plugin pane open") == nil {
-			t.Fatalf("%q: no pane opened", contents)
+		if err := os.RemoveAll(l.StateDir); err != nil {
+			t.Error(err)
 		}
-		if r.find("pane resize") == nil {
-			t.Fatalf("%q: resize skipped after a record failure", contents)
+		if err := os.WriteFile(l.StateDir, []byte("x"), 0600); err != nil {
+			t.Error(err)
 		}
-		if len(warnings) != wantWarnings {
-			t.Fatalf("%q: warnings = %v", contents, warnings)
-		}
+	}
+	if err := l.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.find("plugin pane focus") != nil {
+		t.Fatalf("focused a stale pane: %q", r.calls)
+	}
+	if r.find("plugin pane open") == nil || r.find("pane resize") == nil {
+		t.Fatalf("stale record failure changed the launch: %q", r.calls)
+	}
+	if len(warnings) != 2 {
+		t.Fatalf("warnings = %v, want two", warnings)
 	}
 }
 
