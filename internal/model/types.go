@@ -125,4 +125,8 @@ type CacheEntry struct {
 	Data          Discussion
 }
 
-func (e CacheEntry) Fresh(now time.Time) bool { return now.Sub(e.FetchedAt) < 300*time.Second }
+// DiscussionFreshness is the single cache-freshness policy, shared by the disk
+// cache and by the UI's staleness check.
+const DiscussionFreshness = 300 * time.Second
+
+func (e CacheEntry) Fresh(now time.Time) bool { return now.Sub(e.FetchedAt) < DiscussionFreshness }

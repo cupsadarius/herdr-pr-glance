@@ -74,5 +74,5 @@ func (m *Model) SummaryStale() bool {
 }
 func (m *Model) DiscussionStale(s model.Section) bool {
 	d := m.Discussions[s]
-	return d == nil || d.Data == nil || d.Error != nil || !d.Data.Complete || m.now().Sub(d.Data.FetchedAt) >= 300*time.Second
+	return d == nil || d.Data == nil || d.Error != nil || !d.Data.Complete || m.now().Sub(d.Data.FetchedAt) >= model.DiscussionFreshness
 }

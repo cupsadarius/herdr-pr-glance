@@ -308,7 +308,8 @@ func TestBidiAndZeroWidthRunesAreStripped(t *testing.T) {
 	d := m.Discussions[model.Reviews].Data
 	d.Threads[1].Path = "internal/ui/\u202egg.exe\u202c/sa\u200bfe.go"
 	d.Reviews[0].Author = "oct\u2066o\u2069cat\ufeff"
-	d.Threads[1].Comments[0].Body = "line\u2028break\u2029and\u200fmore"
+	d.Threads[1].Comments[0].Body = "line\u2028break\u2029and\u200fmore, joined \U0001f469\u200d\U0001f4bb stays"
+	m.Expanded["t2"] = true
 	m.Width = 100
 	out := m.View().Content
 	for _, r := range []rune{0x200b, 0x200f, 0x2028, 0x2029, 0x202c, 0x202e, 0x2066, 0x2069, 0xfeff} {
@@ -318,6 +319,9 @@ func TestBidiAndZeroWidthRunesAreStripped(t *testing.T) {
 	}
 	if !strings.Contains(out, "safe.go") || !strings.Contains(out, "@octocat") {
 		t.Fatalf("sanitization removed visible text:\n%s", out)
+	}
+	if !strings.Contains(out, "\U0001f469\u200d\U0001f4bb") {
+		t.Fatalf("the zero-width joiner of an emoji sequence must survive:\n%q", out)
 	}
 }
 

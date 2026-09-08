@@ -647,7 +647,8 @@ func clean(s string) string {
 		case r == '\t':
 			b.WriteString("    ")
 		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
-		case r >= 0x200b && r <= 0x200f, r == 0x2028, r == 0x2029:
+		// U+200C and U+200D are kept: emoji and script joiners are content.
+		case r == 0x200b, r == 0x200e, r == 0x200f, r == 0x2028, r == 0x2029:
 		case r >= 0x202a && r <= 0x202e, r >= 0x2060 && r <= 0x2064:
 		case r >= 0x2066 && r <= 0x2069, r == 0xfeff:
 		default:

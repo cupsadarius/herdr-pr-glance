@@ -339,3 +339,69 @@ func TestManualRefreshDuringFreshCacheRead(t *testing.T) {
 		t.Fatalf("requests=%d", a.discussions)
 	}
 }
+
+func sourceAt(m *Model, branch, cwd, head string, visible bool) tea.Cmd {
+	return apply(m, SourceResult{Generation: m.Generation, Source: model.Source{
+		WorkspaceID: "w1", TabID: "t1", PaneID: "p1",
+		CWD: cwd, Root: "/repo", Branch: branch, HEAD: head, Visible: visible}})
+}
+
+func TestCwdChangeInsideCheckoutChangesNothing(t *testing.T) {
+	m, a, _, _ := harness()
+	finish(m, sourceAt(m, "main", "/repo", "abc", true))
+	finish(m, apply(m, SelectSectionMsg(model.Reviews)))
+	m.Offset, m.Cursor = 3, 1
+	gen, summaries, discussions := m.Generation, a.summaries, a.discussions
+
+	finish(m, sourceAt(m, "main", "/repo/docs", "abc", true))
+
+	if m.Section != model.Reviews || m.Discussions[model.Reviews] == nil {
+		t.Fatalf("cd inside the checkout lost the open section: %q", m.Section)
+	}
+	if m.Generation != gen || m.Snapshot.PR == nil {
+		t.Fatalf("cd inside the checkout invalidated the snapshot (generation %d -> %d)", gen, m.Generation)
+	}
+	if a.summaries != summaries || a.discussions != discussions {
+		t.Fatalf("cd inside the checkout fetched: summaries %d, discussions %d", a.summaries, a.discussions)
+	}
+	if m.Offset != 3 || m.Cursor != 1 {
+		t.Fatalf("cd inside the checkout moved the viewport: offset %d cursor %d", m.Offset, m.Cursor)
+	}
+	if m.Source.CWD != "/repo/docs" {
+		t.Fatalf("the new working directory was not recorded: %q", m.Source.CWD)
+	}
+}
+
+func TestNewCommitRefreshesSummaryWithoutReset(t *testing.T) {
+	m, a, _, now := harness()
+	finish(m, sourceAt(m, "main", "/repo", "abc", true))
+	finish(m, apply(m, SelectSectionMsg(model.Reviews)))
+	gen, discussions := m.Generation, a.discussions
+	*now = now.Add(5 * time.Second)
+
+	finish(m, sourceAt(m, "main", "/repo", "def", true))
+
+	if a.summaries != 2 {
+		t.Fatalf("a new commit must refresh the summary exactly once, got %d fetches", a.summaries)
+	}
+	if m.Section != model.Reviews || m.Discussions[model.Reviews] == nil || a.discussions != discussions {
+		t.Fatalf("a new commit discarded the open discussion (section %q, fetches %d)", m.Section, a.discussions)
+	}
+	if m.Generation != gen {
+		t.Fatalf("a new commit bumped the generation %d -> %d, discarding in-flight work", gen, m.Generation)
+	}
+}
+
+func TestBranchChangeStillResets(t *testing.T) {
+	m, _, _, _ := harness()
+	finish(m, sourceAt(m, "main", "/repo", "abc", true))
+	finish(m, apply(m, SelectSectionMsg(model.Reviews)))
+	gen := m.Generation
+
+	finish(m, sourceAt(m, "feature", "/repo", "xyz", true))
+
+	if m.Section != model.Overview || len(m.Discussions) != 0 || m.Generation <= gen {
+		t.Fatalf("a branch change must reset: section %q, %d discussions, generation %d -> %d",
+			m.Section, len(m.Discussions), gen, m.Generation)
+	}
+}

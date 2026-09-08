@@ -9,7 +9,17 @@ import (
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
 
-func sameSource(a, b model.Source) bool { a.Visible = false; b.Visible = false; return a == b }
+// sourceIdentity is what makes the tracked pull request a different one. The
+// pane's foreground directory and its HEAD commit are deliberately excluded:
+// moving around the checkout, or committing to the branch, is the same source.
+type sourceIdentity struct {
+	workspace, tab, pane, root, branch string
+	empty                              model.EmptyReason
+}
+
+func identify(s model.Source) sourceIdentity {
+	return sourceIdentity{s.WorkspaceID, s.TabID, s.PaneID, s.Root, s.Branch, s.EmptyReason}
+}
 func (m *Model) reset() {
 	m.cancel()
 	m.ctx, m.cancel = context.WithCancel(context.Background())
@@ -61,8 +71,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if x.Err != nil {
 			return m, nil
 		}
-		if !sameSource(m.Source, x.Source) {
+		switch {
+		case identify(m.Source) != identify(x.Source):
 			m.reset()
+		case m.Source.HEAD != x.Source.HEAD:
+			// A commit on the same branch belongs to the same pull request, so
+			// the section, its discussions and the viewport all stay; only the
+			// counts and checks are out of date. Due now, and the generation is
+			// untouched so in-flight discussion results still apply.
+			m.NextSummary = time.Time{}
 		}
 		m.Source = x.Source
 		return m, m.summary(false)
