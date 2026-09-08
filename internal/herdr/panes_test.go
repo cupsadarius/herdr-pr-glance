@@ -323,7 +323,50 @@ func TestOverlayNeitherRecordsNorResizes(t *testing.T) {
 		t.Fatalf("overlay consulted panes: %q", r.calls)
 	}
 	if _, err := os.Stat(filepath.Join(l.StateDir, "panes.json")); !os.IsNotExist(err) {
-		t.Fatalf("overlay wrote a record: %v", err)
+		t.Fatalf("overlay wrote a tab record: %v", err)
+	}
+	// The overlay pane is still remembered, so a split Glance in the same tab
+	// never treats it as the working pane.
+	if got := RecordedPanes(l.StateDir); len(got) != 1 || got[0] != "w1:p9" {
+		t.Fatalf("recorded panes = %v", got)
+	}
+}
+
+func TestRecordedPanesCoverSplitsAndOverlaysAndFeedTheResolver(t *testing.T) {
+	if got := RecordedPanes(""); got != nil {
+		t.Fatalf("no state directory returned %v", got)
+	}
+	dir := t.TempDir()
+	if got := RecordedPanes(dir); len(got) != 0 {
+		t.Fatalf("empty state directory returned %v", got)
+	}
+	write := func(name, contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("panes.json", `{"w1:t1":"w1:p3","w1:t2":"w1:p6","w1:t3":""}`)
+	write("overlays.json", `["w1:p7","w1:p3",""]`)
+	got := RecordedPanes(dir)
+	if strings.Join(got, ",") != "w1:p3,w1:p6,w1:p7" {
+		t.Fatalf("recorded panes = %v", got)
+	}
+	write("panes.json", "not json")
+	write("overlays.json", "{}")
+	if got := RecordedPanes(dir); len(got) != 0 {
+		t.Fatalf("corrupt records returned %v", got)
+	}
+
+	// A split Glance excluding the recorded overlay picks the working pane.
+	c, snapshot := fixture(t)
+	snapshot.Panes = append(snapshot.Panes, Pane{PaneID: "w1:p7", WorkspaceID: "w1", TabID: "w1:t1", CWD: "/plugins/glance"})
+	snapshot.FocusedPaneID = "w1:p7"
+	write("panes.json", `{"w1:t1":"w1:p3"}`)
+	write("overlays.json", `["w1:p7"]`)
+	r := NewResolver(nil, "herdr", c, "w1:p3", RecordedPanes(dir))
+	if got := r.Select(snapshot); got.PaneID != "w1:p1" || got.CWD != "/work/project/subdir" {
+		t.Fatalf("selected %+v, want the working pane", got)
 	}
 }
 

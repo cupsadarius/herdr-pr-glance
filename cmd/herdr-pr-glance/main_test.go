@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cupsadarius/herdr-pr-glance/internal/command"
+	"github.com/cupsadarius/herdr-pr-glance/internal/herdr"
 )
 
 func TestVersionAndUnknownSubcommands(t *testing.T) {
@@ -56,6 +60,7 @@ func TestLauncherPrefersRuntimeEnvironment(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "w1:p7")
 	t.Setenv("HERDR_TAB_ID", "")
 	t.Setenv("HERDR_WORKSPACE_ID", "")
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
 	l, err := launcher()
 	if err != nil {
 		t.Fatal(err)
@@ -104,4 +109,59 @@ func TestSnapshotOnATemporaryCheckout(t *testing.T) {
 	if !strings.Contains(out.String(), `"EmptyReason": "no_pr"`) {
 		t.Fatalf("summary missing the no-PR state: %s", out.String())
 	}
+}
+
+func TestActionsRequireTheStateDirectory(t *testing.T) {
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", "")
+	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", `{"workspace_id":"w1","tab_id":"w1:t1"}`)
+	var out bytes.Buffer
+	for _, name := range []string{"view", "open", "overlay"} {
+		out.Reset()
+		err := run([]string{name}, &out)
+		if err == nil || err.Error() != "HERDR_PLUGIN_STATE_DIR is not set; run inside Herdr" {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("%s wrote to stdout: %q", name, out.String())
+		}
+	}
+}
+
+// The excluding resolver must skip every Glance pane the launcher recorded, so
+// a split Glance beside an overlay Glance keeps tracking the working pane.
+func TestViewExcludesRecordedGlancePanes(t *testing.T) {
+	state := t.TempDir()
+	if err := os.WriteFile(filepath.Join(state, "overlays.json"), []byte(`["w1:p8"]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "panes.json"), []byte(`{"w1:t1":"w1:p9"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	snapshot := `{"result":{"snapshot":{"focused_workspace_id":"w1","focused_tab_id":"w1:t1","focused_pane_id":"w1:p8","panes":[` +
+		`{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","cwd":"` + work + `"},` +
+		`{"pane_id":"w1:p8","workspace_id":"w1","tab_id":"w1:t1","cwd":"/plugins/glance"},` +
+		`{"pane_id":"w1:p9","workspace_id":"w1","tab_id":"w1:t1","cwd":"/plugins/glance"}]}}}`
+	runner := fixedRunner{snapshot}
+	inner := herdr.NewResolver(runner, "herdr", herdr.Invocation{WorkspaceID: "w1", TabID: "w1:t1"}, "w1:p9", nil)
+	resolver := excludingResolver{inner, state, "w1:p9"}
+	resolver.exclude()
+	source, err := resolver.Resolve(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.PaneID != "w1:p1" || source.CWD != work {
+		t.Fatalf("source = %+v, want the working pane", source)
+	}
+}
+
+// fixedRunner answers the session snapshot and refuses everything else, so the
+// test never touches Herdr or Git.
+type fixedRunner struct{ snapshot string }
+
+func (r fixedRunner) Run(_ context.Context, cwd string, args ...string) (string, error) {
+	if len(args) > 2 && args[1] == "api" && args[2] == "snapshot" {
+		return r.snapshot, nil
+	}
+	return (command.ExecRunner{}).Run(context.Background(), cwd, args...)
 }

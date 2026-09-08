@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 
@@ -24,6 +25,10 @@ const (
 	maxResizeCalls  = 2
 	resizeTolerance = 0.02
 	callTimeout     = 2 * time.Second
+	// State files beneath HERDR_PLUGIN_STATE_DIR.
+	splitsFile        = "panes.json"
+	overlaysFile      = "overlays.json"
+	maxOverlayRecords = 32
 )
 
 // Launcher opens, focuses and sizes the Glance pane of the invoking tab. Herdr
@@ -133,8 +138,14 @@ func (l *Launcher) Open(ctx context.Context) error {
 // and rejects --target-pane for them, so only the placement is sent. Overlays
 // are neither recorded nor resized.
 func (l *Launcher) Overlay(ctx context.Context) error {
-	_, err := l.openPane(ctx, []string{"--placement", "overlay"})
-	return err
+	pane, err := l.openPane(ctx, []string{"--placement", "overlay"})
+	if err != nil {
+		return err
+	}
+	// The overlay is on screen: a failed record only costs a split Glance in the
+	// same tab its exclusion, so it warns rather than failing the action.
+	l.warn(l.recordOverlay(pane))
+	return nil
 }
 
 // warn reports a non-fatal failure on one line without failing the action.
@@ -169,26 +180,33 @@ func (l *Launcher) openPane(ctx context.Context, extra []string) (string, error)
 	return envelope.Result.PluginPane.Pane.PaneID, nil
 }
 
-func (l *Launcher) recordsPath() string { return filepath.Join(l.StateDir, "panes.json") }
+func (l *Launcher) recordsPath() string { return filepath.Join(l.StateDir, splitsFile) }
 
-// records maps tab ID to the Glance pane opened for it. An unreadable or
+// records maps tab ID to the split Glance pane opened for it. An unreadable or
 // corrupt file is treated as empty: a new pane is cheaper than a stuck record.
 func (l *Launcher) records() map[string]string {
 	m := map[string]string{}
-	raw, err := os.ReadFile(l.recordsPath())
-	if err != nil {
-		return m
-	}
-	if json.Unmarshal(raw, &m) != nil {
-		return map[string]string{}
-	}
+	readJSON(l.recordsPath(), &m)
 	return m
 }
+
+// readJSON leaves the target untouched when the file is missing or corrupt.
+func readJSON(path string, target any) {
+	raw, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, target) != nil {
+		return
+	}
+}
 func (l *Launcher) writeRecords(m map[string]string) error {
+	return l.writeJSON(l.recordsPath(), m)
+}
+
+// writeJSON replaces the file atomically at 0600, like the discussion cache.
+func (l *Launcher) writeJSON(path string, value any) error {
 	if err := os.MkdirAll(l.StateDir, 0700); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(m)
+	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
@@ -213,7 +231,7 @@ func (l *Launcher) writeRecords(m map[string]string) error {
 	if err = file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, l.recordsPath())
+	return os.Rename(name, path)
 }
 func (l *Launcher) record(pane string) error {
 	if l.TabID == "" {
@@ -222,6 +240,50 @@ func (l *Launcher) record(pane string) error {
 	m := l.records()
 	m[l.TabID] = pane
 	return l.writeRecords(m)
+}
+
+// recordOverlay remembers an overlay pane so that a split Glance in the same
+// tab never mistakes it for a working pane. Overlays are closed by the user
+// rather than tracked per tab, so the newest few IDs are kept as a plain list.
+func (l *Launcher) recordOverlay(pane string) error {
+	var ids []string
+	readJSON(filepath.Join(l.StateDir, overlaysFile), &ids)
+	kept := []string{pane}
+	for _, id := range ids {
+		if id != pane && id != "" && len(kept) < maxOverlayRecords {
+			kept = append(kept, id)
+		}
+	}
+	return l.writeJSON(filepath.Join(l.StateDir, overlaysFile), kept)
+}
+
+// RecordedPanes lists every Glance pane this plugin is known to have opened:
+// the per-tab splits and the recent overlays. Stale IDs are harmless because
+// they never match a live pane; the view passes them to the resolver so a
+// second Glance pane is never taken for the working pane.
+func RecordedPanes(stateDir string) []string {
+	if stateDir == "" {
+		return nil
+	}
+	splits := map[string]string{}
+	readJSON(filepath.Join(stateDir, splitsFile), &splits)
+	var overlays []string
+	readJSON(filepath.Join(stateDir, overlaysFile), &overlays)
+	seen, ids := map[string]bool{}, []string{}
+	for _, id := range splits {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range overlays {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // recorded returns the tab's Glance pane when the session still shows it in

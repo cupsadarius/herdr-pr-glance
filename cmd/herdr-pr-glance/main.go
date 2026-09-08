@@ -84,15 +84,30 @@ func env(name, fallback string) string {
 	}
 	return fallback
 }
+
+// stateDir refuses to fall back to a relative path: Herdr runs plugin commands
+// with the plugin checkout as cwd, and cached discussions and pane records must
+// never land there.
+func stateDir() (string, error) {
+	dir := os.Getenv("HERDR_PLUGIN_STATE_DIR")
+	if dir == "" {
+		return "", errors.New("HERDR_PLUGIN_STATE_DIR is not set; run inside Herdr")
+	}
+	return dir, nil
+}
 func launcher() (*herdr.Launcher, error) {
 	i, err := invocation()
+	if err != nil {
+		return nil, err
+	}
+	state, err := stateDir()
 	if err != nil {
 		return nil, err
 	}
 	return &herdr.Launcher{
 		Runner:       command.ExecRunner{},
 		Bin:          os.Getenv("HERDR_BIN_PATH"),
-		StateDir:     os.Getenv("HERDR_PLUGIN_STATE_DIR"),
+		StateDir:     state,
 		WorkspaceID:  env("HERDR_WORKSPACE_ID", i.WorkspaceID),
 		TabID:        env("HERDR_TAB_ID", i.TabID),
 		TargetPaneID: env("HERDR_PANE_ID", i.FocusedPaneID),
@@ -107,8 +122,34 @@ func browserArgv(url string) []string {
 	return []string{"xdg-open", url}
 }
 
+// excludingResolver keeps the resolver's exclusions in step with the panes the
+// launcher has recorded, so a second Glance pane in the tab (an overlay beside
+// a split) is never mistaken for the working pane. Reading two small files per
+// resolve is cheaper than a stale exclusion list.
+type excludingResolver struct {
+	*herdr.Resolver
+	stateDir string
+	self     string
+}
+
+func (r excludingResolver) Resolve(ctx context.Context) (model.Source, error) {
+	r.exclude()
+	return r.Resolver.Resolve(ctx)
+}
+func (r excludingResolver) exclude() {
+	for _, id := range herdr.RecordedPanes(r.stateDir) {
+		if id != r.self {
+			r.Resolver.ExcludePane(id)
+		}
+	}
+}
+
 func view(ctx context.Context) error {
 	i, err := invocation()
+	if err != nil {
+		return err
+	}
+	state, err := stateDir()
 	if err != nil {
 		return err
 	}
@@ -121,8 +162,9 @@ func view(ctx context.Context) error {
 		_, err := runner.Run(ctx, "", argv...)
 		return err
 	}
-	resolver := herdr.NewResolver(runner, bin, i, self, nil)
-	m := ui.New(resolver, github.Client{Runner: runner}, cache.New(os.Getenv("HERDR_PLUGIN_STATE_DIR")), time.Now)
+	resolver := excludingResolver{herdr.NewResolver(runner, bin, i, self, nil), state, self}
+	resolver.exclude()
+	m := ui.New(resolver, github.Client{Runner: runner}, cache.New(state), time.Now)
 	m.Open = func(url string) error { return action(browserArgv(url)...) }
 	m.Zoom = func() error {
 		if self == "" {
