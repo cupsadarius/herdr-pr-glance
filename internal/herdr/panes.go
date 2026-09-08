@@ -36,6 +36,8 @@ type Launcher struct {
 	WorkspaceID  string
 	TabID        string
 	TargetPaneID string
+	// Warn receives non-fatal failures; nil writes one line to stderr.
+	Warn func(error)
 }
 
 type envelopeError struct {
@@ -109,32 +111,47 @@ func (l *Launcher) Open(ctx context.Context) error {
 		_, err = l.run(ctx, "plugin", "pane", "focus", existing)
 		return err
 	}
-	pane, err := l.openPane(ctx, "split", "--direction", "right")
-	if err != nil {
-		return err
-	}
-	if err = l.record(pane); err != nil {
-		return err
-	}
-	l.resize(ctx, pane)
-	return nil
-}
-
-// Overlay opens a transient overlay. Overlays are neither recorded nor resized.
-func (l *Launcher) Overlay(ctx context.Context) error {
-	_, err := l.openPane(ctx, "overlay")
-	return err
-}
-
-func (l *Launcher) openPane(ctx context.Context, placement string, extra ...string) (string, error) {
-	args := []string{"plugin", "pane", "open", "--plugin", pluginID, "--entrypoint", viewEntrypoint, "--placement", placement}
-	args = append(args, extra...)
+	args := []string{"--placement", "split", "--direction", "right"}
 	switch {
 	case l.TargetPaneID != "":
 		args = append(args, "--target-pane", l.TargetPaneID)
 	case l.WorkspaceID != "":
 		args = append(args, "--workspace", l.WorkspaceID)
 	}
+	pane, err := l.openPane(ctx, args)
+	if err != nil {
+		return err
+	}
+	// The pane is on screen, so the action has succeeded: a failed record only
+	// costs the next invocation a new pane instead of a focus.
+	l.warn(l.record(pane))
+	l.resize(ctx, pane)
+	return nil
+}
+
+// Overlay opens a transient overlay. Herdr places overlays on the active pane
+// and rejects --target-pane for them, so only the placement is sent. Overlays
+// are neither recorded nor resized.
+func (l *Launcher) Overlay(ctx context.Context) error {
+	_, err := l.openPane(ctx, []string{"--placement", "overlay"})
+	return err
+}
+
+// warn reports a non-fatal failure on one line without failing the action.
+func (l *Launcher) warn(err error) {
+	if err == nil {
+		return
+	}
+	if l.Warn != nil {
+		l.Warn(err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "herdr-pr-glance: %v\n", err)
+}
+
+func (l *Launcher) openPane(ctx context.Context, extra []string) (string, error) {
+	args := []string{"plugin", "pane", "open", "--plugin", pluginID, "--entrypoint", viewEntrypoint}
+	args = append(args, extra...)
 	out, err := l.run(ctx, append(args, "--focus")...)
 	if err != nil {
 		return "", err
@@ -189,6 +206,10 @@ func (l *Launcher) writeRecords(m map[string]string) error {
 		file.Close()
 		return err
 	}
+	if err = file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
 	if err = file.Close(); err != nil {
 		return err
 	}
@@ -233,8 +254,10 @@ func (l *Launcher) recorded(ctx context.Context) (string, error) {
 			return pane, nil
 		}
 	}
+	// A record that cannot be dropped is harmless: this run opens a new pane.
 	delete(m, l.TabID)
-	return "", l.writeRecords(m)
+	l.warn(l.writeRecords(m))
+	return "", nil
 }
 
 // resize nudges the new split toward targetColumns. The pane is already open,
@@ -259,9 +282,13 @@ func (l *Launcher) resize(ctx context.Context, pane string) {
 	width := float64(split.Rect.Width)
 	target := math.Min(targetColumns/width, maxResizeAmount)
 	delta := float64(current.Width)/width - target
-	direction := "left"
+	// Live Herdr 0.8.2: on the right-hand pane of a `right` split (224-column
+	// area, both panes 112), `--direction left --amount 0.30` moved the divider
+	// left and grew Glance to 179 columns. Shrinking Glance therefore needs
+	// `--direction right`, growing it `--direction left`.
+	direction := "right"
 	if delta < 0 {
-		direction, delta = "right", -delta
+		direction, delta = "left", -delta
 	}
 	for i := 0; i < maxResizeCalls && delta > resizeTolerance; i++ {
 		amount := math.Min(delta, maxResizeAmount)

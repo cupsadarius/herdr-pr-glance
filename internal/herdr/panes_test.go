@@ -112,7 +112,10 @@ func TestOpenLaunchesSplitRecordsPaneAndResizes(t *testing.T) {
 		t.Fatalf("records = %v", got)
 	}
 	resize := r.find("pane resize")
-	wantResize := []string{"/herdr path/custom", "pane", "resize", "--pane", "w1:p9", "--direction", "left", "--amount", "0.36"}
+	// 44 of 319 columns is ratio 0.138; the pane holds 0.5, so it shrinks by 0.36
+	// and lands near 44 columns. Shrinking the right-hand pane moves the divider
+	// right (verified against live Herdr 0.8.2).
+	wantResize := []string{"/herdr path/custom", "pane", "resize", "--pane", "w1:p9", "--direction", "right", "--amount", "0.36"}
 	if strings.Join(resize, "\x00") != strings.Join(wantResize, "\x00") {
 		t.Fatalf("resize argv = %q, want %q", resize, wantResize)
 	}
@@ -181,6 +184,76 @@ func TestResizeSkipsNarrowAndMissingSplits(t *testing.T) {
 	}
 }
 
+func TestResizeGrowsThePaneAndCapsEachCall(t *testing.T) {
+	r := splitRunner(t, "layout-thin-pane.json")
+	if err := launcher(t, r).Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/herdr path/custom", "pane", "resize", "--pane", "w1:p9", "--direction", "left", "--amount", "0.12"}
+	if got := r.find("pane resize"); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("resize argv = %q, want %q", got, want)
+	}
+	if n := r.count("pane resize"); n != 1 {
+		t.Fatalf("resize calls = %d, want 1", n)
+	}
+
+	r = splitRunner(t, "layout-wide-pane.json")
+	if err := launcher(t, r).Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// 0.78 - 0.14 exceeds the 0.5 Herdr accepts per call, so it takes two.
+	var amounts []string
+	for _, c := range r.calls {
+		if strings.HasPrefix(strings.Join(c[1:], " "), "pane resize") {
+			if c[6] != "right" {
+				t.Fatalf("direction = %q", c[6])
+			}
+			amounts = append(amounts, c[8])
+		}
+	}
+	if strings.Join(amounts, ",") != "0.50,0.15" {
+		t.Fatalf("amounts = %q, want [0.50 0.15]", amounts)
+	}
+}
+
+func TestRecordFailuresDoNotFailTheAction(t *testing.T) {
+	// A read-only state directory: the record can be read but never written.
+	unwritable := func(t *testing.T, contents string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if contents != "" {
+			if err := os.WriteFile(filepath.Join(dir, "panes.json"), []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chmod(dir, 0500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0700) })
+		return dir
+	}
+	// A stale record warns twice: once dropping it, once recording the new pane.
+	for contents, wantWarnings := range map[string]int{"": 1, `{"w1:t1":"w1:gone"}`: 2} {
+		r := splitRunner(t, "layout.json")
+		l := launcher(t, r)
+		l.StateDir = unwritable(t, contents)
+		var warnings []error
+		l.Warn = func(err error) { warnings = append(warnings, err) }
+		if err := l.Open(context.Background()); err != nil {
+			t.Fatalf("%q: %v", contents, err)
+		}
+		if r.find("plugin pane open") == nil {
+			t.Fatalf("%q: no pane opened", contents)
+		}
+		if r.find("pane resize") == nil {
+			t.Fatalf("%q: resize skipped after a record failure", contents)
+		}
+		if len(warnings) != wantWarnings {
+			t.Fatalf("%q: warnings = %v", contents, warnings)
+		}
+	}
+}
+
 func TestResizeFailuresLeaveThePaneOpen(t *testing.T) {
 	for _, prefix := range []string{"pane layout", "pane resize"} {
 		r := splitRunner(t, "layout.json")
@@ -200,6 +273,8 @@ func TestResizeFailuresLeaveThePaneOpen(t *testing.T) {
 	}
 }
 
+// Herdr rejects a targeted overlay: "overlay and popup plugin panes target the
+// active pane". The overlay argv therefore carries placement and focus only.
 func TestOverlayNeitherRecordsNorResizes(t *testing.T) {
 	r := splitRunner(t, "layout.json")
 	l := launcher(t, r)
@@ -208,7 +283,7 @@ func TestOverlayNeitherRecordsNorResizes(t *testing.T) {
 	}
 	open := r.find("plugin pane open")
 	want := []string{"/herdr path/custom", "plugin", "pane", "open", "--plugin", "glance.pr", "--entrypoint", "view",
-		"--placement", "overlay", "--target-pane", "w1:p1", "--focus"}
+		"--placement", "overlay", "--focus"}
 	if strings.Join(open, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("overlay argv = %q, want %q", open, want)
 	}

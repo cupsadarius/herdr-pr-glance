@@ -12,10 +12,13 @@ import (
 
 func TestVersionAndUnknownSubcommands(t *testing.T) {
 	var out bytes.Buffer
+	original := version
+	version = "1.2.3-test"
+	t.Cleanup(func() { version = original })
 	if err := run([]string{"version"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != version+"\n" {
+	if out.String() != "1.2.3-test\n" {
 		t.Fatalf("version output = %q", out.String())
 	}
 	for _, args := range [][]string{{}, {"nope"}, {"snapshot"}, {"snapshot", "--nope"}} {

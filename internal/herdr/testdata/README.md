@@ -40,3 +40,10 @@ Launcher fixtures (synthetic, no real IDs):
 - `layout-narrow.json`: an 80-column split, too narrow to keep a 40-column working
   pane beside 44 columns of Glance; the launcher skips the resize.
 - `layout-zoomed.json`: a zoomed layout with no splits; the launcher skips silently.
+- `layout-thin-pane.json`: a 200-column split with a 20-column Glance pane, which
+  must grow (`--direction left`) toward 44 columns.
+- `layout-wide-pane.json`: a 250-column Glance pane in the 319-column split, a
+  shrink larger than the 0.5 Herdr accepts per call, so it takes two calls.
+
+Resize direction was verified against live Herdr 0.8.2: on the right-hand pane of a
+`right` split, `--direction left` grows the pane and `--direction right` shrinks it.
