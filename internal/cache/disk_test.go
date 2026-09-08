@@ -143,3 +143,49 @@ func TestDiskUnavailableDirectory(t *testing.T) {
 		t.Fatal(ok, err)
 	}
 }
+
+func TestDiskUnrelatedCleanupFailureDoesNotBlockTarget(t *testing.T) {
+	for _, kind := range []string{"unreadable", "missing"} {
+		t.Run(kind, func(t *testing.T) {
+			c := New(t.TempDir())
+			p, d, now := fixture()
+			if err := c.Put(p, model.Comments, d, now); err != nil {
+				t.Fatal(err)
+			}
+			unrelated := filepath.Join(c.dir, "unrelated.json")
+			if kind == "unreadable" {
+				if err := os.WriteFile(unrelated, []byte("private"), 0000); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.ReadFile(unrelated); err == nil {
+					t.Skip("process can read mode 0000 files")
+				}
+			} else {
+				// A dangling link deterministically exercises ENOENT after ReadDir,
+				// the same failure as another process removing a listed entry.
+				if err := os.Symlink(filepath.Join(c.dir, "removed"), unrelated); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, ok, err := c.Get(p, model.Comments, now); err != nil || !ok {
+				t.Fatalf("unrelated cleanup blocked read: hit=%t error=%v", ok, err)
+			}
+			d.Comments[0].ID = "replacement"
+			if err := c.Put(p, model.Comments, d, now); err != nil {
+				t.Fatalf("unrelated cleanup blocked write: %v", err)
+			}
+			e, ok, err := c.Get(p, model.Comments, now)
+			if err != nil || !ok || e.Data.Comments[0].ID != "replacement" {
+				t.Fatal(e, ok, err)
+			}
+			if kind == "unreadable" {
+				if err := os.Chmod(c.path(p, model.Comments), 0000); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok, err := c.Get(p, model.Comments, now); err == nil || ok {
+					t.Fatal("requested read error was suppressed", ok, err)
+				}
+			}
+		})
+	}
+}

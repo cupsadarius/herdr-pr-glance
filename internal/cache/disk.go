@@ -47,15 +47,15 @@ func (c *Disk) prepare(now time.Time) error {
 			continue
 		}
 		path := filepath.Join(c.dir, f.Name())
+		// Cleanup is opportunistic: another entry may be unreadable or
+		// concurrently removed. Requested-entry I/O reports its own errors.
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			continue
 		}
 		var e model.CacheEntry
 		if json.Unmarshal(raw, &e) == nil && !e.FetchedAt.IsZero() && now.Sub(e.FetchedAt) > retention {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
+			_ = os.Remove(path) // A failed cleanup must not block other entries.
 		}
 	}
 	return nil
