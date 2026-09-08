@@ -1,6 +1,6 @@
 # Glance PR — design specification
 
-Status: **Approved for implementation; subagent development in progress.**
+Status: **Approved design. Implementation paused after Task 4; UI rendering, distribution, and final integration remain.**
 
 ## Purpose
 
