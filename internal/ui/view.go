@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
@@ -19,6 +20,7 @@ const (
 	minPathWidth  = 12
 	compactThread = 40
 	narrowText    = "too narrow"
+	appName       = "GLANCE PR"
 	defaultWidth  = 44
 	defaultHigh   = 24
 )
@@ -112,9 +114,9 @@ func (m *Model) layoutView() (string, []rowTarget) {
 	var rows []rowTarget
 	w, h := m.size()
 	if w < minWidth {
-		return narrowText, nil
+		return styled(pal.faint, narrowText), nil
 	}
-	foot := footerLine(w)
+	foot := styleFooter(footerLine(w))
 	if msg := m.emptyMessage(); msg != "" {
 		out := []string{}
 		for _, l := range m.titleLines(w) {
@@ -122,7 +124,7 @@ func (m *Model) layoutView() (string, []rowTarget) {
 		}
 		out = append(out, "")
 		out = append(out, m.errorLines(w)...)
-		out = append(out, wrapLines(msg, w)...)
+		out = append(out, styleWrapped(pal.faint, msg, w)...)
 		return strings.Join(append(pad(out, w, h), foot), "\n"), rows
 	}
 	head := fitHeader(m.headerLines(w), h-2)
@@ -177,8 +179,8 @@ func (m *Model) headerLines(w int) []headerLine {
 	s := m.Snapshot
 	out := m.titleLines(w)
 	add := func(prio int, text string) { out = append(out, headerLine{text: text, prio: prio}) }
-	addWrapped := func(prio int, text string) {
-		for _, l := range wrapLines(text, w) {
+	addWrapped := func(prio int, style lipgloss.Style, text string) {
+		for _, l := range styleWrapped(style, text, w) {
 			add(prio, l)
 		}
 	}
@@ -186,17 +188,21 @@ func (m *Model) headerLines(w int) []headerLine {
 	if s.PR != nil {
 		repo = clean(s.PR.Repository)
 	}
-	add(prioRepo, repo+" · "+clean(m.Source.Branch))
+	add(prioRepo, styled(pal.faint, repo)+" · "+styled(pal.cyan, clean(m.Source.Branch)))
 	add(prioBlank, "")
 	if s.PR != nil {
-		add(prioState, fmt.Sprintf("#%d  %s", s.PR.Number, prState(s)))
+		state := prState(s)
+		add(prioState, styled(pal.bold, fmt.Sprintf("#%d", s.PR.Number))+"  "+styled(prStateStyle(state), state))
 	}
-	addWrapped(prioTitle, clean(s.Title))
-	add(prioAuthor, "@"+clean(s.Author)+"  "+headRef(s)+" → "+clean(s.BaseBranch))
+	addWrapped(prioTitle, pal.bold, clean(s.Title))
+	add(prioAuthor, styled(pal.cyan, "@"+clean(s.Author))+"  "+
+		styled(pal.faint, headRef(s))+" → "+styled(pal.faint, clean(s.BaseBranch)))
 	add(prioBlank, "")
 	add(prioCounts, plural(s.Commits, "commit")+" · "+plural(s.ChangedFiles, "file"))
-	add(prioDiff, fmt.Sprintf("+%d  -%d", s.Additions, s.Deletions))
-	add(prioReview, "Review: "+reviewDecision(s.ReviewDecision))
+	add(prioDiff, styled(pal.green, fmt.Sprintf("+%d", s.Additions))+"  "+
+		styled(pal.red, fmt.Sprintf("-%d", s.Deletions)))
+	add(prioReview, styled(pal.faint, "Review: ")+
+		styled(decisionStyle(s.ReviewDecision), reviewDecision(s.ReviewDecision)))
 	add(prioBlank, "")
 	text, spans := tabLine(m.Section)
 	out = append(out, headerLine{text: text, tabs: spans})
@@ -231,62 +237,72 @@ var tabs = []struct {
 func tabLine(active model.Section) (string, []rowTarget) {
 	var b strings.Builder
 	var spans []rowTarget
+	x := 0
 	for i, t := range tabs {
 		if i > 0 {
 			b.WriteString("  ")
+			x += 2
 		}
-		label := t.label
+		label, style := t.label, pal.faint
 		if t.section == active {
-			label = "[" + label + "]"
+			label, style = "["+label+"]", pal.activeTab
 		}
-		x0 := ansi.StringWidth(b.String())
-		b.WriteString(label)
-		spans = append(spans, rowTarget{x0: x0, x1: ansi.StringWidth(b.String()), tab: t.section, item: -1})
+		b.WriteString(styled(style, label))
+		spans = append(spans, rowTarget{x0: x, x1: x + ansi.StringWidth(label), tab: t.section, item: -1})
+		x += ansi.StringWidth(label)
 	}
 	return b.String(), spans
 }
 
-// statusText keeps the age of the data even while a cooldown is running: that
+// statusSpans keeps the age of the data even while a cooldown is running: that
 // is exactly when knowing how old the summary is matters most.
-func (m *Model) statusText() string {
+func (m *Model) statusSpans() []span {
 	now := m.now()
-	var parts []string
+	var parts []span
+	add := func(style lipgloss.Style, text string) {
+		if len(parts) > 0 {
+			parts = append(parts, span{text: " · ", style: pal.faint})
+		}
+		parts = append(parts, span{text: text, style: style})
+	}
 	switch {
 	case !m.Snapshot.FetchedAt.IsZero():
-		parts = append(parts, "refreshed "+ago(now.Sub(m.Snapshot.FetchedAt))+" ago")
+		add(pal.faint, "refreshed "+ago(now.Sub(m.Snapshot.FetchedAt))+" ago")
 		if m.SummaryStale() {
-			parts = append(parts, "stale")
+			add(pal.yellow, "stale")
 		}
 	case m.SummaryLoading:
-		parts = append(parts, "Loading…")
+		add(pal.faint, "Loading…")
 	}
 	if now.Before(m.CooldownUntil) {
 		d := m.CooldownUntil.Sub(now)
-		parts = append(parts, fmt.Sprintf("rate limited, retry in %ds", int((d+time.Second-1)/time.Second)))
+		add(pal.yellow, fmt.Sprintf("rate limited, retry in %ds", int((d+time.Second-1)/time.Second)))
 	}
-	return strings.Join(parts, " · ")
+	return parts
 }
 
 // titleLines renders the name and status banner, moving the status onto its own
 // wrapped line when it cannot share the first row.
 func (m *Model) titleLines(w int) []headerLine {
-	status := m.statusText()
-	if status == "" || w-ansi.StringWidth("GLANCE PR")-ansi.StringWidth(status) >= 1 {
-		return []headerLine{{text: fitStatus(w, "GLANCE PR", status)}}
+	spans := m.statusSpans()
+	status := spanText(spans)
+	if status == "" || w-ansi.StringWidth(appName)-ansi.StringWidth(status) >= 1 {
+		return []headerLine{{text: fitStatus(w, appName, spans)}}
 	}
-	out := []headerLine{{text: ansi.Truncate("GLANCE PR", w, "…")}}
-	for _, l := range wrapLines(status, w) {
+	out := []headerLine{{text: styled(pal.bold, ansi.Truncate(appName, w, "…"))}}
+	for _, l := range wrapSpans(spans, w) {
 		out = append(out, headerLine{text: l, prio: prioError})
 	}
 	return out
 }
 
-func fitStatus(w int, left, right string) string {
-	gap := w - ansi.StringWidth(left) - ansi.StringWidth(right)
-	if right == "" || gap < 1 {
-		return ansi.Truncate(left, w, "…")
+func fitStatus(w int, left string, right []span) string {
+	text := spanText(right)
+	gap := w - ansi.StringWidth(left) - ansi.StringWidth(text)
+	if text == "" || gap < 1 {
+		return styled(pal.bold, ansi.Truncate(left, w, "…"))
 	}
-	return left + strings.Repeat(" ", gap) + right
+	return styled(pal.bold, left) + strings.Repeat(" ", gap) + renderSpans(right)
 }
 
 var emptyTexts = map[model.EmptyReason]string{
@@ -318,7 +334,7 @@ func (m *Model) errorLines(w int) []string {
 		out = append(out, describeError(err, w)...)
 	}
 	if d := m.Discussions[m.Section]; d != nil && d.Warning != nil {
-		out = append(out, wrapLines("cache: "+clean(d.Warning.Error()), w)...)
+		out = append(out, styleWrapped(pal.yellow, "cache: "+clean(d.Warning.Error()), w)...)
 	}
 	return out
 }
@@ -334,10 +350,10 @@ func describeError(err error, w int) []string {
 	if err == nil {
 		return nil
 	}
-	out := wrapLines(clean(err.Error()), w)
+	out := styleWrapped(pal.red, clean(err.Error()), w)
 	var fe *model.FetchError
 	if errors.As(err, &fe) && fe.Kind == model.AuthenticationError {
-		out = append(out, wrapLines("run: gh auth login", w)...)
+		out = append(out, styleWrapped(pal.yellow, "run: gh auth login", w)...)
 	}
 	return out
 }
@@ -384,31 +400,15 @@ func (m *Model) body(w int) ([]string, []bodyItem) {
 func (m *Model) overviewBody(w int) ([]string, []bodyItem) {
 	s := m.Snapshot
 	if len(s.Checks) == 0 {
-		return []string{"CHECKS", "No checks"}, nil
+		return []string{styled(pal.bold, "CHECKS"), styled(pal.faint, "No checks")}, nil
 	}
-	lead := wrapLines("CHECKS  "+countsText(s.CheckCounts), w)
+	heading := []span{{text: "CHECKS", style: pal.bold}, {text: "  ", style: pal.none}}
+	lead := wrapSpans(append(heading, countsSpans(s.CheckCounts)...), w)
 	items := make([]bodyItem, 0, len(s.Checks))
 	for _, c := range s.Checks {
 		items = append(items, bodyItem{lines: []string{checkRow(c, w)}, url: c.URL})
 	}
 	return lead, items
-}
-
-func countsText(c model.CheckCounts) string {
-	var parts []string
-	for _, p := range []struct {
-		n     int
-		label string
-	}{{c.Failed, "failed"}, {c.Pending, "pending"}, {c.Passed, "passed"},
-		{c.Neutral, "neutral"}, {c.Skipped, "skipped"}, {c.Unknown, "unknown"}} {
-		if p.n > 0 {
-			parts = append(parts, strconv.Itoa(p.n)+" "+p.label)
-		}
-	}
-	if len(parts) == 0 {
-		return "No checks"
-	}
-	return strings.Join(parts, " · ")
 }
 
 func checkGlyph(s model.CheckState) string {
@@ -427,7 +427,8 @@ func checkGlyph(s model.CheckState) string {
 }
 
 func checkRow(c model.Check, w int) string {
-	left := checkGlyph(c.State) + " " + strings.ReplaceAll(clean(c.Name), "\n", " ")
+	glyph := checkGlyph(c.State)
+	left := glyph + " " + strings.ReplaceAll(clean(c.Name), "\n", " ")
 	right := strings.ReplaceAll(string(c.State), "_", " ")
 	// Keep a readable name even in the narrowest supported pane.
 	if c.State == model.CheckActionRequired && w < 30 {
@@ -435,7 +436,12 @@ func checkRow(c model.Check, w int) string {
 	}
 	left = ansi.Truncate(left, max(0, w-ansi.StringWidth(right)-1), "…")
 	gap := max(1, w-ansi.StringWidth(left)-ansi.StringWidth(right))
-	return left + strings.Repeat(" ", gap) + right
+	// The glyph and the outcome carry the state; the name stays readable.
+	style := stateStyle(c.State)
+	if name, ok := strings.CutPrefix(left, glyph); ok {
+		left = styled(style, glyph) + name
+	}
+	return left + strings.Repeat(" ", gap) + styled(style, right)
 }
 
 // sectionLead reports loading progress and the age of the cached discussion.
@@ -443,12 +449,12 @@ func (m *Model) sectionLead(s model.Section) []string {
 	var out []string
 	d := m.Discussions[s]
 	if d == nil || d.Loading {
-		out = append(out, "Loading…")
+		out = append(out, styled(pal.faint, "Loading…"))
 	}
 	if d != nil && d.Data != nil {
-		age := "fetched " + ago(m.now().Sub(d.Data.FetchedAt)) + " ago"
+		age := styled(pal.faint, "fetched "+ago(m.now().Sub(d.Data.FetchedAt))+" ago")
 		if m.DiscussionStale(s) {
-			age += " (stale)"
+			age += " " + styled(pal.yellow, "(stale)")
 		}
 		out = append(out, age)
 	}
@@ -469,7 +475,7 @@ func (m *Model) commentsBody(w int) ([]string, []bodyItem) {
 		return lead, nil
 	}
 	if len(d.Comments) == 0 {
-		return append(lead, "No comments"), nil
+		return append(lead, styled(pal.faint, "No comments")), nil
 	}
 	items := make([]bodyItem, 0, len(d.Comments))
 	for _, c := range d.Comments {
@@ -479,7 +485,8 @@ func (m *Model) commentsBody(w int) ([]string, []bodyItem) {
 }
 
 func (m *Model) commentLines(c model.Comment, w int, indent string) []string {
-	lines := []string{indent + "@" + clean(c.Author) + " · " + ago(m.now().Sub(c.CreatedAt)) + " ago"}
+	lines := []string{indent + styled(pal.cyan, "@"+clean(c.Author)) +
+		styled(pal.faint, " · "+ago(m.now().Sub(c.CreatedAt))+" ago")}
 	for _, l := range wrapLines(clean(c.Body), w-len(indent)) {
 		lines = append(lines, indent+l)
 	}
@@ -494,41 +501,53 @@ func (m *Model) reviewsBody(w int) ([]string, []bodyItem) {
 	}
 	items := make([]bodyItem, 0, len(d.Reviews)+len(d.Threads))
 	for _, r := range d.Reviews {
-		row := "@" + clean(r.Author) + "  " + clean(r.State)
-		items = append(items, bodyItem{lines: []string{ansi.Truncate(row, w, "…")}, url: r.URL})
+		row := []span{{text: "@" + clean(r.Author), style: pal.cyan}, {text: "  ", style: pal.none},
+			{text: clean(r.State), style: decisionStyle(r.State)}}
+		items = append(items, bodyItem{lines: []string{truncateSpans(row, w)}, url: r.URL})
 	}
 	for _, t := range d.Threads {
 		items = append(items, m.threadItem(t, w))
 	}
 	if len(items) == 0 {
-		return append(lead, "No reviews"), nil
+		return append(lead, styled(pal.faint, "No reviews")), nil
 	}
 	return lead, items
 }
 
 func (m *Model) threadItem(t model.ReviewThread, w int) bodyItem {
-	head := "▸ "
+	arrow := "▸"
 	if m.Expanded[t.ID] {
-		head = "▾ "
+		arrow = "▾"
 	}
-	where := clean(t.Path)
+	head := arrow + " "
+	// An unresolved path is where the reader must look, so it is the loudest.
+	pathStyle := pal.boldCyan
+	if t.Resolved {
+		pathStyle = pal.cyan
+	}
+	where := []span{{text: clean(t.Path), style: pathStyle}}
 	if t.Line != nil {
-		where += ":" + strconv.Itoa(*t.Line)
+		where = append(where, span{text: ":" + strconv.Itoa(*t.Line), style: pal.faint})
 	}
+	path := spanText(where)
 	avail := w - ansi.StringWidth(head)
-	tail := threadTail(t, w < compactThread)
-	if avail-ansi.StringWidth(tail) < minPathWidth {
-		tail = threadTail(t, true)
+	tailSpans := threadTailSpans(t, w < compactThread)
+	if avail-ansi.StringWidth(spanText(tailSpans)) < minPathWidth {
+		tailSpans = threadTailSpans(t, true)
 	}
+	tail := spanText(tailSpans)
 	room := avail - ansi.StringWidth(tail)
+	tailWidth := ansi.StringWidth(tail)
 	if room < minPathWidth {
 		room = min(minPathWidth, avail)
-		tail = ansi.Truncate(tail, avail-room, "…")
+		tailWidth = avail - room
 	}
 	if room < 1 {
 		room = 1
 	}
-	lines := []string{head + truncatePath(where, room) + tail}
+	shown := truncatePath(path, room)
+	lines := []string{styled(pal.bold, arrow) + " " +
+		styleLeftTruncated(path, shown, where) + truncateSpans(tailSpans, tailWidth)}
 	if m.Expanded[t.ID] {
 		for _, c := range t.Comments {
 			lines = append(lines, m.commentLines(c, w, "  ")...)
@@ -538,34 +557,39 @@ func (m *Model) threadItem(t model.ReviewThread, w int) bodyItem {
 	return bodyItem{lines: append(lines, ""), url: t.URL, threadID: t.ID}
 }
 
-// threadTail is the state and reply count shown after a thread's path. The
+// threadTailSpans is the state and reply count shown after a thread's path. The
 // compact form keeps a narrow row readable: ✓ resolved, ~ outdated, Nc replies.
-func threadTail(t model.ReviewThread, compact bool) string {
+func threadTailSpans(t model.ReviewThread, compact bool) []span {
+	out := []span{{text: "  ", style: pal.none}}
 	if compact {
-		flags := ""
 		if t.Resolved {
-			flags += "✓"
+			out = append(out, span{text: "✓", style: pal.faintGreen})
 		}
 		if t.Outdated {
-			flags += "~"
+			out = append(out, span{text: "~", style: pal.faint})
 		}
-		if flags != "" {
-			flags += " "
+		if t.Resolved || t.Outdated {
+			out = append(out, span{text: " ", style: pal.none})
 		}
-		return "  " + flags + strconv.Itoa(len(t.Comments)) + "c"
+		return append(out, span{text: strconv.Itoa(len(t.Comments)) + "c", style: pal.none})
 	}
-	var tags []string
-	if t.Resolved {
-		tags = append(tags, "resolved")
+	if t.Resolved || t.Outdated {
+		out = append(out, span{text: "(", style: pal.faint})
+		if t.Resolved {
+			out = append(out, span{text: "resolved", style: pal.faintGreen})
+		}
+		if t.Resolved && t.Outdated {
+			out = append(out, span{text: ", ", style: pal.faint})
+		}
+		if t.Outdated {
+			out = append(out, span{text: "outdated", style: pal.faint})
+		}
+		out = append(out, span{text: ")", style: pal.faint}, span{text: "  ", style: pal.none})
+	} else {
+		out = out[:0]
+		out = append(out, span{text: "  ", style: pal.none})
 	}
-	if t.Outdated {
-		tags = append(tags, "outdated")
-	}
-	tail := ""
-	if len(tags) > 0 {
-		tail = "  (" + strings.Join(tags, ", ") + ")"
-	}
-	return tail + "  " + plural(len(t.Comments), "comment")
+	return append(out, span{text: plural(len(t.Comments), "comment"), style: pal.none})
 }
 
 // renderBody flattens lead lines and items into screen lines, marking the
@@ -591,7 +615,7 @@ func markCursor(lines []string, spans [][2]int, cursor int) {
 		return
 	}
 	if at := spans[cursor][0]; at < len(lines) {
-		lines[at] = "›" + strings.TrimPrefix(lines[at], " ")
+		lines[at] = styled(pal.bold, "›") + strings.TrimPrefix(lines[at], " ")
 	}
 }
 

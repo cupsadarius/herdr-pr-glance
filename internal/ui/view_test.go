@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -159,15 +161,16 @@ func TestRenderBoundsAcrossSizes(t *testing.T) {
 				m.Width, m.Height = w, h
 				out := m.View().Content
 				assertBounds(t, out, w, h)
-				if !strings.Contains(out, "q close") {
+				plain := ansi.Strip(out)
+				if !strings.Contains(plain, "q close") {
 					t.Fatalf("%s %dx%d: footer missing", name, w, h)
 				}
 				if w != 30 || h != 40 {
 					continue
 				}
 				for _, want := range survivors[name] {
-					if !strings.Contains(out, want) {
-						t.Fatalf("%s at %dx%d lost %q:\n%s", name, w, h, want, out)
+					if !strings.Contains(plain, want) {
+						t.Fatalf("%s at %dx%d lost %q:\n%s", name, w, h, want, plain)
 					}
 				}
 			}
@@ -178,7 +181,7 @@ func TestRenderBoundsAcrossSizes(t *testing.T) {
 // bodyRows returns the rendered rows below the tab line, which is where the
 // section body starts once the header has been laid out.
 func bodyRows(content string) []string {
-	rows := strings.Split(content, "\n")
+	rows := strings.Split(ansi.Strip(content), "\n")
 	for i, r := range rows {
 		if !strings.Contains(r, "Overview") || !strings.Contains(r, "Reviews") {
 			continue
@@ -253,7 +256,7 @@ func TestCursorMovesBetweenTallItems(t *testing.T) {
 	if m.Cursor != 1 {
 		t.Fatalf("cursor %d after j", m.Cursor)
 	}
-	if out := m.View().Content; !strings.Contains(out, "@reviewer · 1m ago") {
+	if out := plainView(m); !strings.Contains(out, "@reviewer · 1m ago") {
 		t.Fatalf("j must bring the next item's header into view:\n%s", out)
 	}
 	apply(m, key("k"))
@@ -270,13 +273,13 @@ func TestCountsAreSingularAtOne(t *testing.T) {
 	overviewFixture(m, *now)
 	m.Width = 100
 	m.Snapshot.Commits, m.Snapshot.ChangedFiles = 1, 1
-	if out := m.View().Content; !strings.Contains(out, "1 commit · 1 file") {
+	if out := plainView(m); !strings.Contains(out, "1 commit · 1 file") {
 		t.Fatalf("counts must be singular at one:\n%s", out)
 	}
 	m, now = viewHarness()
 	reviewsFixture(m, *now)
 	m.Width = 100
-	out := m.View().Content
+	out := plainView(m)
 	if !strings.Contains(out, "  1 comment") || strings.Contains(out, "1 comments") {
 		t.Fatalf("a single reply must read 1 comment:\n%s", out)
 	}
@@ -292,6 +295,7 @@ func TestThreadRowKeepsFileNameAtEveryWidth(t *testing.T) {
 		m.Width, m.Height = w, 40
 		out := m.View().Content
 		assertBounds(t, out, w, 40)
+		out = ansi.Strip(out)
 		for _, want := range []string{"handler.go", "view.go"} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("width %d dropped the thread file name %q:\n%s", w, want, out)
@@ -312,7 +316,7 @@ func TestBidiAndZeroWidthRunesAreStripped(t *testing.T) {
 	d.Threads[1].Comments[0].Body = "line\u2028break\u2029and\u200fmore, joined \U0001f469\u200d\U0001f4bb stays"
 	m.Expanded["t2"] = true
 	m.Width = 100
-	out := m.View().Content
+	out := plainView(m)
 	for _, r := range []rune{0x200b, 0x200f, 0x2028, 0x2029, 0x202c, 0x202e, 0x2066, 0x2069, 0xfeff} {
 		if strings.ContainsRune(out, r) {
 			t.Fatalf("rune %U survived sanitization:\n%q", r, out)
@@ -330,7 +334,7 @@ func TestOverviewRendersIdentityStatisticsAndChecks(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
 	m.Width = 100
-	out := m.View().Content
+	out := plainView(m)
 	for _, want := range []string{
 		"GLANCE PR", "refreshed 12s ago", "acme/service", "feature/retry", "#3630", "OPEN",
 		"Re-request denied approvals", "@author", "feature/retry → main", "143 commits", "8 files",
@@ -351,7 +355,7 @@ func TestForkHeadIdentity(t *testing.T) {
 	overviewFixture(m, *now)
 	m.Snapshot.HeadRepository = "fork/service"
 	m.Width = 100
-	if out := m.View().Content; !strings.Contains(out, "fork/service:feature/retry → main") {
+	if out := plainView(m); !strings.Contains(out, "fork/service:feature/retry → main") {
 		t.Fatalf("fork head missing:\n%s", out)
 	}
 }
@@ -360,7 +364,7 @@ func TestEmptyCheckListSaysNoChecks(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
 	m.Snapshot.Checks, m.Snapshot.CheckCounts = nil, model.CheckCounts{}
-	out := m.View().Content
+	out := plainView(m)
 	if !strings.Contains(out, "No checks") || strings.Contains(out, "passed") {
 		t.Fatalf("expected No checks and no success claim:\n%s", out)
 	}
@@ -382,7 +386,7 @@ func TestEmptyStates(t *testing.T) {
 			m, _ := viewHarness()
 			tc.apply(m)
 			out := m.View().Content
-			if !strings.Contains(out, tc.want) {
+			if !strings.Contains(ansi.Strip(out), tc.want) {
 				t.Fatalf("missing %q in:\n%s", tc.want, out)
 			}
 			assertBounds(t, out, m.Width, m.Height)
@@ -395,7 +399,7 @@ func TestErrorCooldownStaleAndCacheWarning(t *testing.T) {
 	overviewFixture(m, *now)
 	m.Width = 100
 	m.SummaryError = &model.FetchError{Kind: model.AuthenticationError, Err: errors.New("bad credentials")}
-	out := m.View().Content
+	out := plainView(m)
 	if !strings.Contains(out, "authentication") || !strings.Contains(out, "bad credentials") || !strings.Contains(out, "run: gh auth login") {
 		t.Fatalf("authentication error not explained:\n%s", out)
 	}
@@ -407,18 +411,18 @@ func TestErrorCooldownStaleAndCacheWarning(t *testing.T) {
 	overviewFixture(m, *now)
 	m.Width = 100
 	m.CooldownUntil = now.Add(97 * time.Second)
-	if out := m.View().Content; !strings.Contains(out, "refreshed 12s ago · rate limited, retry in 97s") {
+	if out := plainView(m); !strings.Contains(out, "refreshed 12s ago · rate limited, retry in 97s") {
 		t.Fatalf("cooldown must keep the refresh age:\n%s", out)
 	}
 	m.Snapshot.FetchedAt = now.Add(-90 * time.Second)
-	if out := m.View().Content; !strings.Contains(out, "refreshed 1m ago · stale · rate limited, retry in 97s") {
+	if out := plainView(m); !strings.Contains(out, "refreshed 1m ago · stale · rate limited, retry in 97s") {
 		t.Fatalf("cooldown must keep the age and the stale marker:\n%s", out)
 	}
 
 	m, now = viewHarness()
 	overviewFixture(m, *now)
 	m.Snapshot.FetchedAt = now.Add(-90 * time.Second)
-	if out := m.View().Content; !strings.Contains(out, "stale") {
+	if out := plainView(m); !strings.Contains(out, "stale") {
 		t.Fatalf("stale marker missing:\n%s", out)
 	}
 
@@ -426,7 +430,7 @@ func TestErrorCooldownStaleAndCacheWarning(t *testing.T) {
 	commentsFixture(m, *now)
 	m.Width = 100
 	m.Discussions[model.Comments].Warning = errors.New("disk full")
-	if out := m.View().Content; !strings.Contains(out, "cache: disk full") {
+	if out := plainView(m); !strings.Contains(out, "cache: disk full") {
 		t.Fatalf("cache warning missing:\n%s", out)
 	}
 }
@@ -435,7 +439,7 @@ func TestTooNarrow(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
 	m.Width = 12
-	if out := m.View().Content; !strings.Contains(out, "too narrow") {
+	if out := plainView(m); !strings.Contains(out, "too narrow") {
 		t.Fatalf("expected too narrow, got:\n%s", out)
 	}
 }
@@ -447,9 +451,15 @@ func TestCommentsSanitizeWrapAndPreserveCodeBlocks(t *testing.T) {
 		m.Width = w
 		out := m.View().Content
 		assertBounds(t, out, w, m.Height)
-		if strings.ContainsRune(out, 0x1b) || strings.ContainsRune(out, 0x07) {
+		if strings.ContainsRune(out, 0x07) {
 			t.Fatalf("control characters survived at width %d: %q", w, out)
 		}
+		// Comment bodies are rendered without styling, so any escape sequence
+		// on a body line could only have come from the remote text.
+		if line := styledLine(t, out, "Please look at"); strings.ContainsRune(line, 0x1b) {
+			t.Fatalf("an escape sequence survived in a comment body at width %d: %q", w, line)
+		}
+		out = ansi.Strip(out)
 		for _, want := range []string{"@octocat", "```", "func main() {", "🚀", "@第二の著者"} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("width %d missing %q in:\n%s", w, want, out)
@@ -465,7 +475,7 @@ func TestReviewThreadsCollapseExpandAndTruncatePaths(t *testing.T) {
 	m, now := viewHarness()
 	reviewsFixture(m, *now)
 	m.Width = 44
-	out := m.View().Content
+	out := plainView(m)
 	assertBounds(t, out, 44, 40)
 	if !strings.Contains(out, "@reviewer  APPROVED") {
 		t.Fatalf("review decision missing:\n%s", out)
@@ -480,7 +490,7 @@ func TestReviewThreadsCollapseExpandAndTruncatePaths(t *testing.T) {
 		t.Fatalf("thread metadata missing at width 44:\n%s", out)
 	}
 	m.Width = 100
-	if wide := m.View().Content; !strings.Contains(wide, "2 comments") || !strings.Contains(wide, "(resolved, outdated)") {
+	if wide := plainView(m); !strings.Contains(wide, "2 comments") || !strings.Contains(wide, "(resolved, outdated)") {
 		t.Fatalf("full thread metadata missing at width 100:\n%s", wide)
 	}
 	m.Width = 44
@@ -490,7 +500,7 @@ func TestReviewThreadsCollapseExpandAndTruncatePaths(t *testing.T) {
 
 	m.Cursor = 1 // the first thread
 	finish(m, apply(m, key("enter")))
-	out = m.View().Content
+	out = plainView(m)
 	if !strings.Contains(out, "▾") || !strings.Contains(out, "guard clause") || !strings.Contains(out, "Added in the latest push.") {
 		t.Fatalf("expanded thread must show replies:\n%s", out)
 	}
@@ -519,7 +529,7 @@ func TestExpansionSurvivesRefreshAndCursorClamps(t *testing.T) {
 	if m.Cursor != 0 {
 		t.Fatalf("cursor must clamp when data shrinks, got %d", m.Cursor)
 	}
-	if out := m.View().Content; !strings.Contains(out, "▾") || !strings.Contains(out, "guard clause") {
+	if out := plainView(m); !strings.Contains(out, "▾") || !strings.Contains(out, "guard clause") {
 		t.Fatalf("expansion lost in render:\n%s", out)
 	}
 }
@@ -528,11 +538,11 @@ func TestDiscussionAgeAndStaleMarker(t *testing.T) {
 	m, now := viewHarness()
 	commentsFixture(m, *now)
 	m.Width = 100
-	if out := m.View().Content; !strings.Contains(out, "fetched 30s ago") || strings.Contains(out, "fetched 30s ago (stale)") {
+	if out := plainView(m); !strings.Contains(out, "fetched 30s ago") || strings.Contains(out, "fetched 30s ago (stale)") {
 		t.Fatalf("fresh discussion age wrong:\n%s", out)
 	}
 	m.Discussions[model.Comments].Data.FetchedAt = now.Add(-400 * time.Second)
-	if out := m.View().Content; !strings.Contains(out, "(stale)") {
+	if out := plainView(m); !strings.Contains(out, "(stale)") {
 		t.Fatalf("stale discussion marker missing:\n%s", out)
 	}
 }
@@ -547,7 +557,8 @@ func TestLongCheckNamesPreserveOutcomes(t *testing.T) {
 		} {
 			state := tc.state
 			for _, name := range []string{"integration / ubuntu-latest / go-1.25 / database", "日本語\x1b[31m検査\x07 / database"} {
-				row := checkRow(model.Check{Name: name, State: state}, width-1)
+				styledRow := checkRow(model.Check{Name: name, State: state}, width-1)
+				row := ansi.Strip(styledRow)
 				want := tc.label
 				if state == model.CheckActionRequired && width == 20 {
 					want = "action req"
@@ -555,8 +566,8 @@ func TestLongCheckNamesPreserveOutcomes(t *testing.T) {
 				if !strings.Contains(row, want) {
 					t.Errorf("width %d: lost %s: %q", width, want, row)
 				}
-				if ansi.StringWidth(row) > width-1 || strings.ContainsAny(row, "\x1b\x07\n") {
-					t.Errorf("invalid row: %q", row)
+				if ansi.StringWidth(styledRow) > width-1 || strings.ContainsAny(row, "\x1b\x07\n") {
+					t.Errorf("invalid row: %q", styledRow)
 				}
 				if !strings.Contains(row, "inte") && !strings.Contains(row, "日本") {
 					t.Errorf("name missing: %q", row)
@@ -596,3 +607,295 @@ func TestViewDoesNotMutateModel(t *testing.T) {
 		}
 	}
 }
+
+// SGR parameters the palette is allowed to emit: bold, faint, underline,
+// reverse and the eight base ANSI foregrounds, all resolved by the terminal's
+// own theme. Anything else means a hard-coded colour slipped in.
+const (
+	sgrBold    = "1"
+	sgrFaint   = "2"
+	sgrReverse = "7"
+	sgrRed     = "31"
+	sgrGreen   = "32"
+	sgrYellow  = "33"
+	sgrMagenta = "35"
+	sgrCyan    = "36"
+)
+
+var sgrPattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// carries reports whether any escape sequence on the line sets the parameter;
+// lipgloss packs several of them into one sequence.
+func carries(line, param string) bool {
+	for _, seq := range sgrPattern.FindAllString(line, -1) {
+		for _, p := range strings.Split(seq[2:len(seq)-1], ";") {
+			if p == param {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// plainView renders the view and strips styling, so tests that care about
+// layout keep comparing the text the terminal shows.
+func plainView(m *Model) string { return ansi.Strip(m.View().Content) }
+
+// styledLine returns the first rendered line whose plain text contains want.
+func styledLine(t *testing.T, content, want string) string {
+	t.Helper()
+	for _, l := range strings.Split(content, "\n") {
+		if strings.Contains(ansi.Strip(l), want) {
+			return l
+		}
+	}
+	t.Fatalf("no line containing %q in:\n%s", want, content)
+	return ""
+}
+
+func TestColorLeavesTheLayoutUnchanged(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"overview", goldenOverview44}, {"reviews", goldenReviews44},
+	} {
+		m, now := viewHarness()
+		fixtures(*now)[tc.name](m)
+		m.Width, m.Height = 44, 40
+		if got := plainView(m); got != tc.want {
+			t.Errorf("%s: styling changed the layout\n--- got ---\n%s\n--- want ---\n%s", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestCheckRowsAndCountsCarryStateColors(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	out := m.View().Content
+	for _, tc := range []struct{ name, sgr string }{
+		{"unit tests", sgrRed}, {"deploy preview", sgrRed}, {"e2e", sgrRed}, {"migrate", sgrRed},
+		{"integration tests", sgrYellow}, {"lint", sgrGreen}, {"build", sgrGreen},
+		{"docs", sgrFaint}, {"vendor", sgrFaint}, {"mystery", sgrFaint},
+		{"4 failed", sgrRed}, {"1 pending", sgrYellow}, {"CHECKS", sgrBold},
+	} {
+		if line := styledLine(t, out, tc.name); !carries(line, tc.sgr) {
+			t.Errorf("%q must carry %q: %q", tc.name, tc.sgr, line)
+		}
+	}
+	if line := styledLine(t, out, "lint"); carries(line, sgrRed) {
+		t.Errorf("a passing check must not be red: %q", line)
+	}
+}
+
+func TestHeaderTabsAndFooterCarryTheirStyles(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	m.Snapshot.ReviewDecision = "APPROVED"
+	out := m.View().Content
+	for _, tc := range []struct{ want, sgr string }{
+		{"GLANCE PR", sgrBold}, {"refreshed 12s ago", sgrFaint},
+		{"acme/service", sgrFaint}, {"feature/retry", sgrCyan},
+		{"#3630", sgrBold}, {"OPEN", sgrGreen},
+		{"Re-request denied", sgrBold}, {"@author", sgrCyan},
+		{"+284", sgrGreen}, {"-76", sgrRed},
+		{"Review:", sgrFaint}, {"Approved", sgrGreen},
+		{"[Overview]", sgrReverse}, {"[Overview]", sgrBold},
+		{"q close", sgrBold}, {"q close", sgrFaint},
+	} {
+		if line := styledLine(t, out, tc.want); !carries(line, tc.sgr) {
+			t.Errorf("%q must carry %q: %q", tc.want, tc.sgr, line)
+		}
+	}
+	m.Snapshot.State, m.Snapshot.ReviewDecision = "MERGED", "REVIEW_REQUIRED"
+	out = m.View().Content
+	if line := styledLine(t, out, "MERGED"); !carries(line, sgrMagenta) {
+		t.Errorf("a merged PR must be magenta: %q", line)
+	}
+	if line := styledLine(t, out, "Review required"); !carries(line, sgrYellow) {
+		t.Errorf("a pending review decision must be yellow: %q", line)
+	}
+}
+
+func TestErrorsAndEmptyStatesCarryTheirStyles(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	m.SummaryError = &model.FetchError{Kind: model.AuthenticationError, Err: errors.New("bad credentials")}
+	m.CooldownUntil = now.Add(97 * time.Second)
+	out := m.View().Content
+	for _, tc := range []struct{ want, sgr string }{
+		{"bad credentials", sgrRed}, {"run: gh auth login", sgrYellow},
+		{"stale", sgrYellow}, {"retry in 97s", sgrYellow},
+	} {
+		if line := styledLine(t, out, tc.want); !carries(line, tc.sgr) {
+			t.Errorf("%q must carry %q: %q", tc.want, tc.sgr, line)
+		}
+	}
+
+	m, now = viewHarness()
+	commentsFixture(m, *now)
+	m.Width = 100
+	m.Discussions[model.Comments].Warning = errors.New("disk full")
+	out = m.View().Content
+	if line := styledLine(t, out, "cache: disk full"); !carries(line, sgrYellow) {
+		t.Errorf("a cache warning must be yellow: %q", line)
+	}
+	if line := styledLine(t, out, "@octocat"); !carries(line, sgrCyan) || !carries(line, sgrFaint) {
+		t.Errorf("a comment head must be cyan author and faint time: %q", line)
+	}
+
+	m, _ = viewHarness()
+	m.Source.EmptyReason = model.NoWorkingPane
+	if line := styledLine(t, m.View().Content, "No working pane"); !carries(line, sgrFaint) {
+		t.Errorf("an empty state must be faint: %q", line)
+	}
+}
+
+func TestReviewRowsAndThreadsCarryTheirStyles(t *testing.T) {
+	m, now := viewHarness()
+	reviewsFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	out := m.View().Content
+	for _, tc := range []struct{ want, sgr string }{
+		{"@reviewer", sgrCyan}, {"APPROVED", sgrGreen},
+		{"handler.go", sgrCyan}, {"handler.go", sgrBold}, {":42", sgrFaint},
+		{"▸", sgrBold}, {"(resolved, outdated)", sgrGreen},
+	} {
+		if line := styledLine(t, out, tc.want); !carries(line, tc.sgr) {
+			t.Errorf("%q must carry %q: %q", tc.want, tc.sgr, line)
+		}
+	}
+	m.Width = 30
+	if line := styledLine(t, m.View().Content, "✓~"); !carries(line, sgrGreen) {
+		t.Errorf("the compact resolved flag must be green: %q", line)
+	}
+	m.Width = 100
+	m.Cursor = 1
+	if line := styledLine(t, m.View().Content, "handler.go"); !strings.HasPrefix(line, "\x1b[1m›") {
+		t.Errorf("the selection marker must be bold: %q", line)
+	}
+}
+
+// TestOnlyThePaletteReachesTheTerminal keeps the view inside the 16 ANSI
+// colours and the four attributes, so it follows the user's terminal theme,
+// and proves the width bounds above are asserted on styled output.
+func TestOnlyThePaletteReachesTheTerminal(t *testing.T) {
+	allowed := map[string]bool{"": true, "0": true, "1": true, "2": true, "4": true, "7": true}
+	for n := 30; n <= 37; n++ {
+		allowed[strconv.Itoa(n)] = true
+	}
+	for n := 90; n <= 97; n++ {
+		allowed[strconv.Itoa(n)] = true
+	}
+	_, now := viewHarness()
+	for name, apply := range fixtures(*now) {
+		for _, w := range []int{30, 44, 100} {
+			m, _ := viewHarness()
+			apply(m)
+			m.Width, m.Height = w, 40
+			out := m.View().Content
+			assertBounds(t, out, w, 40)
+			if !strings.Contains(out, "\x1b[") {
+				t.Errorf("%s at width %d rendered no styling at all", name, w)
+			}
+			if strings.ContainsRune(out, 0x07) {
+				t.Errorf("%s at width %d emitted a BEL", name, w)
+			}
+			rest := out
+			for _, seq := range sgrPattern.FindAllString(out, -1) {
+				rest = strings.Replace(rest, seq, "", 1)
+				for _, param := range strings.Split(seq[2:len(seq)-1], ";") {
+					if !allowed[param] {
+						t.Errorf("%s at width %d emitted SGR parameter %q", name, w, param)
+					}
+				}
+			}
+			if strings.ContainsRune(rest, 0x1b) {
+				t.Errorf("%s at width %d emitted a non-SGR escape sequence: %q", name, w, rest)
+			}
+		}
+	}
+}
+
+// Golden renderings captured from main at 3835746, before any styling.
+const goldenOverview44 = `GLANCE PR                  refreshed 12s ago
+acme/service · feature/retry
+
+#3630  OPEN
+Re-request denied approvals when the
+reviewer list changes
+@author  feature/retry → main
+
+143 commits · 8 files
++284  -76
+Review: Changes requested
+
+[Overview]  Comments  Reviews
+
+ CHECKS  4 failed · 1 pending · 2 passed · 1
+ neutral · 1 skipped · 1 unknown
+›× unit tests                         failed
+ × deploy preview                  timed out
+ × e2e                             cancelled
+ × migrate                   action required
+ ◷ integration tests                 pending
+ ✓ lint                               passed
+ ✓ build                              passed
+ · docs                              neutral
+ · vendor                            skipped
+ ? mystery                           unknown
+
+
+
+
+
+
+
+
+
+
+
+
+
+r refresh  o browser  z zoom  q close`
+
+const goldenReviews44 = `GLANCE PR                  refreshed 12s ago
+acme/service · feature/retry
+
+#3630  OPEN
+Re-request denied approvals when the
+reviewer list changes
+@author  feature/retry → main
+
+143 commits · 8 files
++284  -76
+Review: Changes requested
+
+Overview  Comments  [Reviews]
+
+ fetched 30s ago
+›@reviewer  APPROVED
+ ▸ …are/about/here/handler.go:42  2 comments
+ 
+ ▸ internal/ui/view.go  ✓~ 1c
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+r refresh  o browser  z zoom  q close`
