@@ -75,11 +75,10 @@ type bodyItem struct {
 	threadID string
 }
 
-// View renders the current state. Rendering is pure apart from recording the
-// row-to-target map that handleMouse consults for hit testing; no other state
-// is mutated here, and every derived value is recomputed from the model.
+// View renders the current state without mutating the model.
 func (m *Model) View() tea.View {
-	v := tea.NewView(m.render())
+	content, _ := m.layoutView()
+	v := tea.NewView(content)
 	v.MouseMode = tea.MouseModeCellMotion
 	v.AltScreen = true
 	return v
@@ -108,11 +107,12 @@ func (m *Model) contentWidth() int {
 	return w - 1
 }
 
-func (m *Model) render() string {
-	m.rows = nil
+// layoutView derives both display text and click targets from current state.
+func (m *Model) layoutView() (string, []rowTarget) {
+	var rows []rowTarget
 	w, h := m.size()
 	if w < minWidth {
-		return narrowText
+		return narrowText, nil
 	}
 	foot := footerLine(w)
 	if msg := m.emptyMessage(); msg != "" {
@@ -123,7 +123,7 @@ func (m *Model) render() string {
 		out = append(out, "")
 		out = append(out, m.errorLines(w)...)
 		out = append(out, wrapLines(msg, w)...)
-		return strings.Join(append(pad(out, w, h), foot), "\n")
+		return strings.Join(append(pad(out, w, h), foot), "\n"), rows
 	}
 	head := fitHeader(m.headerLines(w), h-2)
 	lines, spans := renderBody(m.body(m.contentWidth()))
@@ -134,15 +134,15 @@ func (m *Model) render() string {
 	for i, l := range head {
 		for _, t := range l.tabs {
 			t.y = i
-			m.rows = append(m.rows, t)
+			rows = append(rows, t)
 		}
 		out = append(out, ansi.Truncate(l.text, w, "…"))
 	}
 	for i := off; i < len(lines) && i-off < bodyHigh; i++ {
-		m.rows = append(m.rows, rowTarget{y: len(out), x1: -1, item: itemAt(spans, i)})
+		rows = append(rows, rowTarget{y: len(out), x1: -1, item: itemAt(spans, i)})
 		out = append(out, ansi.Truncate(lines[i], w, "…"))
 	}
-	return strings.Join(append(pad(out, w, h), foot), "\n")
+	return strings.Join(append(pad(out, w, h), foot), "\n"), rows
 }
 
 // pad keeps the footer on the last row and the whole view within the height.
@@ -343,7 +343,7 @@ func describeError(err error, w int) []string {
 }
 
 func prState(s model.Snapshot) string {
-	if s.Draft {
+	if s.Draft && strings.EqualFold(s.State, "OPEN") {
 		return "DRAFT"
 	}
 	if s.State == "" {
@@ -427,12 +427,14 @@ func checkGlyph(s model.CheckState) string {
 }
 
 func checkRow(c model.Check, w int) string {
-	left := checkGlyph(c.State) + " " + clean(c.Name)
+	left := checkGlyph(c.State) + " " + strings.ReplaceAll(clean(c.Name), "\n", " ")
 	right := strings.ReplaceAll(string(c.State), "_", " ")
-	gap := w - ansi.StringWidth(left) - ansi.StringWidth(right)
-	if gap < 2 {
-		return ansi.Truncate(left, w, "…")
+	// Keep a readable name even in the narrowest supported pane.
+	if c.State == model.CheckActionRequired && w < 30 {
+		right = "action req"
 	}
+	left = ansi.Truncate(left, max(0, w-ansi.StringWidth(right)-1), "…")
+	gap := max(1, w-ansi.StringWidth(left)-ansi.StringWidth(right))
 	return left + strings.Repeat(" ", gap) + right
 }
 

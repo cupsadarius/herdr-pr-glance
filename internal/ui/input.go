@@ -49,7 +49,7 @@ func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// handleMouse resolves a click against the row map recorded by the last render.
+// handleMouse resolves a click against the layout derived from current state.
 func (m *Model) handleMouse(e tea.Mouse) tea.Cmd {
 	switch e.Button {
 	case tea.MouseWheelUp:
@@ -62,7 +62,8 @@ func (m *Model) handleMouse(e tea.Mouse) tea.Cmd {
 	default:
 		return nil
 	}
-	for _, r := range m.rows {
+	_, rows := m.layoutView()
+	for _, r := range rows {
 		if r.y != e.Y || (r.x1 >= 0 && (e.X < r.x0 || e.X >= r.x1)) {
 			continue
 		}

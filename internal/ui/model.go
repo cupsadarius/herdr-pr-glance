@@ -55,7 +55,6 @@ type Model struct {
 	now         func() time.Time
 	ctx         context.Context
 	cancel      context.CancelFunc
-	rows        []rowTarget
 	resolving   bool
 	failures    int
 }

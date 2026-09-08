@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -533,5 +534,65 @@ func TestDiscussionAgeAndStaleMarker(t *testing.T) {
 	m.Discussions[model.Comments].Data.FetchedAt = now.Add(-400 * time.Second)
 	if out := m.View().Content; !strings.Contains(out, "(stale)") {
 		t.Fatalf("stale discussion marker missing:\n%s", out)
+	}
+}
+
+func TestLongCheckNamesPreserveOutcomes(t *testing.T) {
+	for _, width := range []int{20, 44} {
+		for _, tc := range []struct {
+			state model.CheckState
+			label string
+		}{
+			{model.CheckFailed, "failed"}, {model.CheckCancelled, "cancelled"}, {model.CheckTimedOut, "timed out"}, {model.CheckActionRequired, "action required"}, {model.CheckUnknown, "unknown"}, {model.CheckNeutral, "neutral"}, {model.CheckSkipped, "skipped"},
+		} {
+			state := tc.state
+			for _, name := range []string{"integration / ubuntu-latest / go-1.25 / database", "日本語\x1b[31m検査\x07 / database"} {
+				row := checkRow(model.Check{Name: name, State: state}, width-1)
+				want := tc.label
+				if state == model.CheckActionRequired && width == 20 {
+					want = "action req"
+				}
+				if !strings.Contains(row, want) {
+					t.Errorf("width %d: lost %s: %q", width, want, row)
+				}
+				if ansi.StringWidth(row) > width-1 || strings.ContainsAny(row, "\x1b\x07\n") {
+					t.Errorf("invalid row: %q", row)
+				}
+				if !strings.Contains(row, "inte") && !strings.Contains(row, "日本") {
+					t.Errorf("name missing: %q", row)
+				}
+			}
+		}
+	}
+}
+
+func TestDraftDoesNotHideLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		draft bool
+		want  string
+	}{{"CLOSED", true, "CLOSED"}, {"MERGED", true, "MERGED"}, {"OPEN", true, "DRAFT"}, {"OPEN", false, "OPEN"}} {
+		if got := prState(model.Snapshot{State: tc.state, Draft: tc.draft}); got != tc.want {
+			t.Errorf("%s draft=%v: got %s want %s", tc.state, tc.draft, got, tc.want)
+		}
+	}
+}
+
+func TestViewDoesNotMutateModel(t *testing.T) {
+	m, now := viewHarness()
+	reviewsFixture(m, *now)
+	// Capture field values before rendering, including navigation maps.
+	before := reflect.ValueOf(*m)
+	values := make([]string, before.NumField())
+	for i := range values {
+		values[i] = fmt.Sprintf("%#v", before.Field(i))
+	}
+	m.View()
+	m.View()
+	after := reflect.ValueOf(*m)
+	for i, value := range values {
+		if got := fmt.Sprintf("%#v", after.Field(i)); got != value {
+			t.Errorf("View changed %s", after.Type().Field(i).Name)
+		}
 	}
 }

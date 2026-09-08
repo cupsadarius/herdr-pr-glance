@@ -42,7 +42,7 @@ func (r *scriptedRunner) Run(_ context.Context, cwd string, args ...string) (str
 	}
 	for prefix, err := range r.failures {
 		if strings.HasPrefix(line, prefix) {
-			return "", err
+			return r.responses[prefix], err
 		}
 	}
 	for prefix, out := range r.responses {
@@ -98,7 +98,7 @@ func splitRunner(t *testing.T, layout string) *scriptedRunner {
 	return &scriptedRunner{responses: map[string]string{
 		"api snapshot":      body(t, "snapshot.json"),
 		"plugin pane open":  body(t, "pane-open.json"),
-		"plugin pane focus": `{"id":"fixture","result":{}}`,
+		"plugin pane focus": `{"id":"fixture","result":{"type":"plugin_pane_focused","plugin_pane":{"plugin_id":"glance.pr","entrypoint":"view","pane":{"pane_id":"w1:p2"}}}}`,
 		"pane layout":       body(t, layout),
 		"pane resize":       `{"id":"fixture","result":{}}`,
 	}}
@@ -479,5 +479,49 @@ func TestRecordedPanesAreExcludedOnlyInThePluginRoot(t *testing.T) {
 	rootless.SetRecorded([]string{"w1:p2"})
 	if got := rootless.Select(snapshot); got.PaneID != "w1:p2" {
 		t.Fatalf("selected %+v, want w1:p2", got)
+	}
+}
+
+func TestRecordedPaneOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name, out string
+		failure   error
+		recover   bool
+	}{
+		{"ordinary pane", `{"error":{"code":"plugin_pane_not_found","message":"plugin pane not found"}}`, errors.New("exit 1"), true},
+		{"structured missing", `{"error":{"code":"plugin_pane_not_found","message":"plugin pane not found"}}`, nil, true},
+		{"other plugin", `{"result":{"type":"plugin_pane_focused","plugin_pane":{"plugin_id":"other.plugin","entrypoint":"view","pane":{"pane_id":"w1:p2"}}}}`, nil, true},
+		{"other entrypoint", `{"result":{"plugin_pane":{"plugin_id":"glance.pr","entrypoint":"other","pane":{"pane_id":"w1:p2"}}}}`, nil, true},
+		{"unexpected error", `{"error":{"code":"permission_denied","message":"plugin_pane_not_found is not the error code"}}`, nil, false},
+		{"transport failure", "", errors.New("transport failed"), false},
+		{"malformed success", `{}`, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := splitRunner(t, "layout.json")
+			r.responses["plugin pane focus"] = tc.out
+			if tc.failure != nil {
+				r.failures = map[string]error{"plugin pane focus": tc.failure}
+			}
+			l := launcher(t, r)
+			if err := l.record("w1:p2"); err != nil {
+				t.Fatal(err)
+			}
+			err := l.Open(context.Background())
+			if tc.recover {
+				if err != nil {
+					t.Fatalf("stale ownership blocks launch: %v", err)
+				}
+				if r.count("plugin pane open") != 1 || records(t, l)[l.TabID] != "w1:p9" {
+					t.Fatalf("did not replace stale pane: %v", r.calls)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("unexpected focus failure was swallowed")
+				}
+				if r.count("plugin pane open") != 0 {
+					t.Fatal("opened despite unexpected focus failure")
+				}
+			}
+		})
 	}
 }

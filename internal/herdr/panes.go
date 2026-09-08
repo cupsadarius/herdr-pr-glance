@@ -34,7 +34,7 @@ const (
 
 // Launcher opens, focuses and sizes the Glance pane of the invoking tab. Herdr
 // 0.8.2 cannot list plugin panes, so the pane opened for a tab is recorded in
-// the plugin state directory and verified against a session snapshot.
+// the plugin state directory and checked against a snapshot and focus ownership.
 type Launcher struct {
 	Runner       Runner
 	Bin          string
@@ -53,7 +53,9 @@ type envelopeError struct {
 type paneOpenEnvelope struct {
 	Result struct {
 		PluginPane struct {
-			Pane struct {
+			PluginID   string `json:"plugin_id"`
+			Entrypoint string `json:"entrypoint"`
+			Pane       struct {
 				PaneID string `json:"pane_id"`
 			} `json:"pane"`
 		} `json:"plugin_pane"`
@@ -123,8 +125,12 @@ func (l *Launcher) Open(ctx context.Context) error {
 		l.warn(l.prune(records, overlays, live))
 	}
 	if existing := liveRecord(records[l.TabID], l.TabID, live); existing != "" {
-		_, err = l.run(ctx, "plugin", "pane", "focus", existing)
-		return err
+		owned, err := l.focusRecorded(ctx, existing)
+		if err != nil || owned {
+			return err
+		}
+		delete(records, l.TabID)
+		l.warn(l.writeRecords(records))
 	}
 	args := []string{"--placement", "split", "--direction", "right"}
 	switch {
@@ -142,6 +148,31 @@ func (l *Launcher) Open(ctx context.Context) error {
 	l.warn(l.record(pane))
 	l.resize(ctx, pane)
 	return nil
+}
+
+// focusRecorded verifies ownership because short pane handles can be reused
+// after a session restart. Only a known missing/wrong owner permits a new pane.
+func (l *Launcher) focusRecorded(ctx context.Context, pane string) (bool, error) {
+	out, runErr := l.run(ctx, "plugin", "pane", "focus", pane)
+	var envelope paneOpenEnvelope
+	decodeErr := json.Unmarshal([]byte(out), &envelope)
+	if decodeErr == nil && envelope.Error != nil {
+		if envelope.Error.Code == "plugin_pane_not_found" {
+			return false, nil
+		}
+		return false, fmt.Errorf("Herdr %s: %s", envelope.Error.Code, envelope.Error.Message)
+	}
+	if runErr != nil {
+		return false, runErr
+	}
+	if decodeErr != nil {
+		return false, fmt.Errorf("decode Herdr pane focus: %w", decodeErr)
+	}
+	info := envelope.Result.PluginPane
+	if info.PluginID == "" || info.Entrypoint == "" || info.Pane.PaneID != pane {
+		return false, fmt.Errorf("Herdr pane focus response missing or mismatched ownership")
+	}
+	return info.PluginID == pluginID && info.Entrypoint == viewEntrypoint, nil
 }
 
 // liveRecord returns the recorded pane only while the session still shows it in
@@ -350,8 +381,8 @@ func (l *Launcher) sessionPanes(ctx context.Context) ([]Pane, error) {
 }
 
 // prune drops recorded panes the session no longer shows. Herdr pane IDs are
-// short handles, so a dead record left behind could later name a live working
-// pane; keeping the files to live IDs removes that risk.
+// short handles, so presence alone does not prove ownership; Open also verifies
+// the current tab's record using the focus response.
 func (l *Launcher) prune(records map[string]string, overlays []string, live []Pane) error {
 	alive := make(map[string]bool, len(live))
 	for _, p := range live {

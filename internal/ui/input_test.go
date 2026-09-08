@@ -294,3 +294,48 @@ func TestScrollOffsetSurvivesRefreshesAndClicks(t *testing.T) {
 		t.Fatalf("click selected item %d, want the tall first item", m.Cursor)
 	}
 }
+
+func TestMouseReplayDoesNotDependOnRendering(t *testing.T) {
+	for _, scenario := range []string{"initial", "resize", "scroll", "expansion"} {
+		t.Run(scenario, func(t *testing.T) {
+			a, now := viewHarness()
+			reviewsFixture(a, *now)
+			b, _ := viewHarness()
+			reviewsFixture(b, *now)
+			if scenario != "initial" {
+				a.View()
+				b.View()
+			}
+			for _, m := range []*Model{a, b} {
+				switch scenario {
+				case "resize":
+					apply(m, tea.WindowSizeMsg{Width: 30, Height: 40})
+				case "scroll":
+					apply(m, tea.WindowSizeMsg{Width: 44, Height: 24})
+					apply(m, wheel(0, false))
+				case "expansion":
+					apply(m, key("j"))
+					apply(m, key("enter"))
+				}
+			}
+			y := -1
+			for i, line := range strings.Split(a.View().Content, "\n") {
+				if strings.Contains(line, "view.go") {
+					y = i
+					break
+				}
+			}
+			if y < 0 {
+				t.Fatal("second thread is not visible")
+			}
+			apply(a, click(3, y))
+			apply(b, click(3, y))
+			if a.Cursor != 2 || !a.Expanded["t2"] {
+				t.Fatalf("rendered click missed second thread: %d %v", a.Cursor, a.Expanded)
+			}
+			if b.Cursor != a.Cursor || b.Expanded["t2"] != a.Expanded["t2"] {
+				t.Fatalf("click without View differs: cursor=%d expanded=%v", b.Cursor, b.Expanded)
+			}
+		})
+	}
+}
