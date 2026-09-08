@@ -166,7 +166,7 @@ func (r *Resolver) Checkout(ctx context.Context, s model.Source) (model.Source, 
 		return s, err
 	}
 	s.Root = root
-	branch, err := run("symbolic-ref", "--quiet", "--short", "HEAD")
+	branch, err := run("symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
 		var e *command.Error
 		if !errors.As(err, &e) || e.ExitCode != 1 {
@@ -174,7 +174,7 @@ func (r *Resolver) Checkout(ctx context.Context, s model.Source) (model.Source, 
 		}
 		s.EmptyReason = model.DetachedHEAD
 	} else {
-		s.Branch = branch
+		s.Branch = strings.TrimPrefix(branch, "refs/heads/")
 	}
 	head, err := run("rev-parse", "--verify", "HEAD")
 	if err != nil {

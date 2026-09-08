@@ -168,3 +168,19 @@ func TestUnbornAndMissingDirectory(t *testing.T) {
 		t.Fatal("missing directory treated as non-Git")
 	}
 }
+
+func TestBranchNameWithMatchingTag(t *testing.T) {
+	for _, branch := range []string{"main", "feature/topic"} {
+		t.Run(branch, func(t *testing.T) {
+			dir := t.TempDir()
+			git(t, dir, "init", "-b", branch)
+			git(t, dir, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial")
+			git(t, dir, "tag", branch)
+			r := NewResolver(command.ExecRunner{}, "herdr", Invocation{}, "", nil)
+			got, err := r.Checkout(context.Background(), model.Source{CWD: dir})
+			if err != nil || got.Branch != branch {
+				t.Fatalf("branch = %q, want %q; error = %v", got.Branch, branch, err)
+			}
+		})
+	}
+}
