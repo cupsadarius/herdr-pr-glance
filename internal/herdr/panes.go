@@ -120,9 +120,13 @@ func (l *Launcher) Open(ctx context.Context) error {
 		if records[l.TabID] != "" {
 			return err
 		}
-		l.warn(err)
+		// Unpruned records may name panes Herdr has since reused, so a stale ID
+		// can cost Glance the right-hand column this once.
+		l.warn(fmt.Errorf("pane records left unverified, placement may be off: %w", err))
 	} else {
-		l.warn(l.prune(records, overlays, live))
+		var pruneErr error
+		overlays, pruneErr = l.prune(records, overlays, live)
+		l.warn(pruneErr)
 	}
 	if existing := liveRecord(records[l.TabID], l.TabID, live); existing != "" {
 		owned, err := l.focusRecorded(ctx, existing)
@@ -210,7 +214,8 @@ func (l *Launcher) Overlay(ctx context.Context) error {
 	// Pruning is maintenance: a snapshot failure only leaves the files as they
 	// were, so it neither warns nor blocks the overlay.
 	if live, err := l.sessionPanes(ctx); err == nil {
-		l.warn(l.prune(records, overlays, live))
+		_, pruneErr := l.prune(records, overlays, live)
+		l.warn(pruneErr)
 	}
 	pane, err := l.openPane(ctx, []string{"--placement", "overlay"})
 	if err != nil {
@@ -395,7 +400,7 @@ func (l *Launcher) sessionPanes(ctx context.Context) ([]Pane, error) {
 // prune drops recorded panes the session no longer shows. Herdr pane IDs are
 // short handles, so presence alone does not prove ownership; Open also verifies
 // the current tab's record using the focus response.
-func (l *Launcher) prune(records map[string]string, overlays []string, live []Pane) error {
+func (l *Launcher) prune(records map[string]string, overlays []string, live []Pane) ([]string, error) {
 	alive := make(map[string]bool, len(live))
 	for _, p := range live {
 		alive[p.PaneID] = true
@@ -420,7 +425,7 @@ func (l *Launcher) prune(records map[string]string, overlays []string, live []Pa
 	if len(kept) != len(overlays) {
 		err = errors.Join(err, l.writeJSON(filepath.Join(l.StateDir, overlaysFile), kept))
 	}
-	return err
+	return kept, err
 }
 
 // paneLayout reads the tab geometry around one pane.
@@ -455,6 +460,11 @@ func (l *Launcher) splitTarget(ctx context.Context, glance map[string]bool) stri
 	geometry, err := l.paneLayout(ctx, l.TargetPaneID)
 	if err != nil {
 		l.warn(err)
+		return l.TargetPaneID
+	}
+	if geometry.Zoomed {
+		// A zoomed tab reports one pane covering the area; splitting it would
+		// place Glance inside the zoom rather than beside the column.
 		return l.TargetPaneID
 	}
 	edge := geometry.Area.X + geometry.Area.Width
