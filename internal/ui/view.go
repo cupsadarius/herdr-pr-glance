@@ -624,11 +624,7 @@ func revealCursor(off, total, high int, spans [][2]int, cursor int) int {
 	if high <= 0 || cursor < 0 || cursor >= len(spans) {
 		return clampOffset(off, total, high)
 	}
-	// Selecting the first item reveals the lead lines above it.
 	start, end := spans[cursor][0], spans[cursor][1]
-	if cursor == 0 {
-		start = 0
-	}
 	switch {
 	case start < off, start >= off+high:
 		off = start

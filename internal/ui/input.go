@@ -131,12 +131,12 @@ func (m *Model) toggleThread() {
 		m.Expanded = map[string]bool{}
 	}
 	m.Expanded[it.threadID] = !m.Expanded[it.threadID]
-	m.clamp()
+	m.clampReveal()
 }
 
 func (m *Model) moveCursor(delta int) {
 	m.Cursor += delta
-	m.clamp()
+	m.clampReveal()
 }
 
 // scroll moves the viewport by rows and leaves the cursor where it is, so the
@@ -158,9 +158,23 @@ func (m *Model) bodyHeight() int {
 }
 
 // clamp keeps the cursor inside the item list and the offset inside the body,
-// with the cursor visible. Update calls it after navigation, resize and every
-// change of the data being displayed.
+// leaving the reader where they scrolled to. Update calls it after a resize and
+// after every change of the data being displayed: neither is a reason to move
+// the viewport.
 func (m *Model) clamp() {
+	lines, _ := m.fit()
+	m.Offset = clampOffset(m.Offset, lines, m.bodyHeight())
+}
+
+// clampReveal also scrolls the selected item's first line into view. Only the
+// inputs that move the selection use it.
+func (m *Model) clampReveal() {
+	lines, spans := m.fit()
+	m.Offset = revealCursor(m.Offset, lines, m.bodyHeight(), spans, m.Cursor)
+}
+
+// fit bounds the cursor and reports the body's line count and item spans.
+func (m *Model) fit() (int, [][2]int) {
 	lead, items := m.body(m.contentWidth())
 	if m.Cursor >= len(items) {
 		m.Cursor = len(items) - 1
@@ -169,5 +183,5 @@ func (m *Model) clamp() {
 		m.Cursor = 0
 	}
 	lines, spans := renderBody(lead, items)
-	m.Offset = revealCursor(m.Offset, len(lines), m.bodyHeight(), spans, m.Cursor)
+	return len(lines), spans
 }

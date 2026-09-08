@@ -259,9 +259,8 @@ func TestCursorMovesBetweenTallItems(t *testing.T) {
 	if m.Cursor != 0 {
 		t.Fatalf("cursor %d after k", m.Cursor)
 	}
-	rows := bodyRows(m.View().Content)
-	if !strings.Contains(rows[1], "@coderabbit") || m.Offset != 0 {
-		t.Fatalf("k must show the head of the first item again, offset %d:\n%s", m.Offset, rows[0])
+	if row := bodyRows(m.View().Content)[0]; !strings.Contains(row, "@coderabbit") {
+		t.Fatalf("k must show the head of the first item again, offset %d, first row %q", m.Offset, row)
 	}
 }
 

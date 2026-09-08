@@ -90,8 +90,8 @@ func TestCursorMovementAndPaging(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		apply(m, key("up"))
 	}
-	if m.Cursor != 0 || m.Offset != 0 {
-		t.Fatalf("cursor %d offset %d must clamp at the top", m.Cursor, m.Offset)
+	if m.Cursor != 0 || !strings.Contains(m.View().Content, "× unit tests") {
+		t.Fatalf("cursor %d offset %d must return to the first item", m.Cursor, m.Offset)
 	}
 	apply(m, key("pgdown"))
 	if m.Offset == 0 {
@@ -249,5 +249,48 @@ func TestWindowResizeClampsScroll(t *testing.T) {
 	}
 	if m.Offset != 0 {
 		t.Fatalf("growing the window must clamp the offset, got %d", m.Offset)
+	}
+}
+
+func TestScrollOffsetSurvivesRefreshesAndClicks(t *testing.T) {
+	m := tallCommentsModel(t)
+	apply(m, key("pgdown"))
+	apply(m, key("pgdown"))
+	off := m.Offset
+	if off == 0 {
+		t.Fatal("fixture did not scroll")
+	}
+	data := *m.Discussions[model.Comments].Data
+	for _, tc := range []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"summary poll", SummaryResult{Generation: m.Generation, Data: m.Snapshot}},
+		{"same size resize", tea.WindowSizeMsg{Width: m.Width, Height: m.Height}},
+		{"successful action", ActionErrMsg{}},
+		{"discussion refresh", DiscussionResult{Generation: m.Generation, Section: model.Comments, Data: data}},
+	} {
+		apply(m, tc.msg)
+		if m.Offset != off {
+			t.Fatalf("%s moved the offset from %d to %d", tc.name, off, m.Offset)
+		}
+	}
+	content := m.View().Content
+	y := -1
+	for i, l := range strings.Split(content, "\n") {
+		if strings.Contains(l, "body line ") {
+			y = i
+			break
+		}
+	}
+	if y < 0 {
+		t.Fatalf("no body row to click:\n%s", content)
+	}
+	apply(m, click(3, y))
+	if m.Offset != off {
+		t.Fatalf("clicking inside a tall item moved the offset from %d to %d", off, m.Offset)
+	}
+	if m.Cursor != 0 {
+		t.Fatalf("click selected item %d, want the tall first item", m.Cursor)
 	}
 }
