@@ -60,16 +60,21 @@ func (c Client) Discussion(ctx context.Context, pr model.PR, section model.Secti
 	return d, nil
 }
 
-// replyOverflow points at a thread whose first reply page did not exhaust its connection.
+// replyOverflow points at a thread whose first reply page did not exhaust its
+// connection. threadIndex is a position in d.Threads in arrival order, so it stays
+// valid only until something reorders that slice.
 type replyOverflow struct {
-	id, cursor string
-	thread     int
+	id, cursor  string
+	threadIndex int
 }
 
 // reviewSection batches reviews, review threads and each thread's first page of
-// replies into one query. GraphQL points are charged per connection request, not
-// per node, so nesting comments(first: 100) under reviewThreads(first: 100) costs
-// the same single request that the old code paid once per thread (N+1 subprocesses).
+// replies into one query. GitHub scores a call by summing the requests each unique
+// connection needs — a nested connection counts once per parent node — then dividing
+// by 100 and rounding up: 1 + 1 + 100 = 102 requests, 2 points, against the N + 2
+// points and N + 2 subprocesses the per-thread fan-out paid (62 for a 60-thread PR).
+// Node budget: 100 + 100 + 100x100 = 10,200 of the 500,000 a single call may request,
+// which is what keeps a third nested first: 100 level off the table.
 // Only a connection that reports hasNextPage earns a follow-up request.
 func (c Client) reviewSection(ctx context.Context, d *model.Discussion, host, id string) error {
 	reviews, threads := newCursor(""), newCursor("")
@@ -116,10 +121,11 @@ func (c Client) reviewSection(ctx context.Context, d *model.Discussion, host, id
 		if err != nil {
 			return err
 		}
-		if err := appendReplies(&d.Threads[o.thread], replies); err != nil {
+		if err := appendReplies(&d.Threads[o.threadIndex], replies); err != nil {
 			return err
 		}
 	}
+	// Overflow indices are positions in d.Threads; reorder only after they are consumed.
 	sort.SliceStable(d.Threads, func(i, j int) bool { return !d.Threads[i].Resolved && d.Threads[j].Resolved })
 	return nil
 }
@@ -187,7 +193,7 @@ func appendThreads(d *model.Discussion, nodes []json.RawMessage) ([]replyOverflo
 			if replies.PageInfo.EndCursor == "" {
 				return nil, invalid("invalid comments pagination cursor")
 			}
-			overflow = append(overflow, replyOverflow{id: v.ID, cursor: replies.PageInfo.EndCursor, thread: len(d.Threads)})
+			overflow = append(overflow, replyOverflow{id: v.ID, cursor: replies.PageInfo.EndCursor, threadIndex: len(d.Threads)})
 		}
 		d.Threads = append(d.Threads, thread)
 	}
@@ -287,12 +293,12 @@ func (c Client) discussionPages(ctx context.Context, host, id, nodeType, field, 
 		if err := json.Unmarshal(data, &response); err != nil {
 			return nil, invalid("decode discussion: %v", err)
 		}
-		connection, err := decodeConnection(response.Node[field], field)
+		next, err := decodeConnection(response.Node[field], field)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, connection.Nodes...)
-		if err := page.advance(field, connection); err != nil {
+		all = append(all, next.Nodes...)
+		if err := page.advance(field, next); err != nil {
 			return nil, err
 		}
 	}

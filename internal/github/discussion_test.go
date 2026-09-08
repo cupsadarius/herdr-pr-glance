@@ -115,6 +115,32 @@ func TestReviewsFollowUpPagesThreadsOnly(t *testing.T) {
 	}
 }
 
+// The mirror case: an exhausted threads connection drops out of the follow-up too.
+func TestReviewsFollowUpPagesReviewsOnly(t *testing.T) {
+	first := reviewsPage(
+		connectionJSON(`[{"id":"r1","state":"APPROVED"}]`, true, "review-next"),
+		threadsPage(false, "", threadNode("t1", "", commentNodes("c1"), false, "")))
+	second := reviewsPage(connectionJSON(`[{"id":"r2","state":"COMMENTED"}]`, false, ""), "")
+	r := &discussionRunner{t: t, responses: []string{first, second}}
+	d, err := (Client{Runner: r}).Discussion(context.Background(), model.PR{Host: "github.com", NodeID: "pr"}, model.Reviews)
+	if err != nil || !d.Complete || len(d.Reviews) != 2 || len(d.Threads) != 1 {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("want 2 requests, got %d: %v", len(r.calls), r.calls)
+	}
+	follow := r.call(1)
+	if strings.Contains(follow, "reviewThreads(first") || !strings.Contains(follow, "reviews(first") {
+		t.Fatalf("follow-up still pages threads: %s", follow)
+	}
+	if strings.Contains(follow, "$threadCursor") {
+		t.Fatalf("follow-up declares an unused variable: %s", follow)
+	}
+	if !strings.Contains(follow, "reviewCursor=review-next") {
+		t.Fatalf("missing review cursor: %s", follow)
+	}
+}
+
 // Only the thread whose nested comments overflow costs an extra request.
 func TestReviewsFetchesReplyOverflowPerThreadOnly(t *testing.T) {
 	threads := threadsPage(false, "",
