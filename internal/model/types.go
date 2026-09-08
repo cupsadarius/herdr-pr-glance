@@ -1,6 +1,8 @@
 // Package model contains values shared by Glance's services and UI.
 package model
 
+import "time"
+
 type EmptyReason string
 
 const (
@@ -22,3 +24,60 @@ type Source struct {
 	Visible     bool
 	EmptyReason EmptyReason
 }
+
+const NoPR EmptyReason = "no_pr"
+
+type PR struct {
+	Host       string
+	Repository string
+	Number     int
+	NodeID     string
+	URL        string
+}
+type CheckState string
+
+const (
+	CheckFailed         CheckState = "failed"
+	CheckTimedOut       CheckState = "timed_out"
+	CheckCancelled      CheckState = "cancelled"
+	CheckActionRequired CheckState = "action_required"
+	CheckPending        CheckState = "pending"
+	CheckPassed         CheckState = "passed"
+	CheckNeutral        CheckState = "neutral"
+	CheckSkipped        CheckState = "skipped"
+	CheckUnknown        CheckState = "unknown"
+)
+
+type Check struct {
+	Name, URL, Status, Conclusion string
+	State                         CheckState
+}
+type CheckCounts struct{ Failed, Pending, Passed, Neutral, Skipped, Unknown int }
+type Snapshot struct {
+	PR                                          *PR
+	EmptyReason                                 EmptyReason
+	Title, Author, State                        string
+	Draft                                       bool
+	BaseBranch, HeadBranch, HeadRepository      string
+	ReviewDecision                              string
+	Commits, ChangedFiles, Additions, Deletions int
+	Checks                                      []Check
+	CheckCounts                                 CheckCounts
+	FetchedAt                                   time.Time
+}
+type ErrorKind string
+
+const (
+	AuthenticationError  ErrorKind = "authentication"
+	NetworkError         ErrorKind = "network"
+	GitHubError          ErrorKind = "github"
+	InvalidResponseError ErrorKind = "invalid_response"
+)
+
+type FetchError struct {
+	Kind ErrorKind
+	Err  error
+}
+
+func (e *FetchError) Error() string { return string(e.Kind) + ": " + e.Err.Error() }
+func (e *FetchError) Unwrap() error { return e.Err }
