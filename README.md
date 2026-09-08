@@ -118,6 +118,9 @@ closes.
 | `1`, `2`, `3` or click a section | Overview, Comments, Reviews |
 | Arrows / `j`, `k`; Page Up / Down; mouse wheel | Navigate and scroll |
 | Enter / click a thread | Expand or collapse |
+| Enter / click a stack row | Show that pull request of the stack |
+| `]`, `[` | Move to the stack entry above or below |
+| `\` | Return to the branch's own pull request |
 | `r` | Refresh the active section, ignoring cache freshness |
 | `o` | Open the selected item's URL, falling back to the PR URL |
 | `z` | Toggle pane zoom through Herdr |
@@ -130,6 +133,13 @@ Only the up and down arrows are bound; left and right do nothing.
 - **Overview** — PR number, title, author, state, branches, exact counts of
   commits, changed files, additions and deletions, review decision, and CI checks with
   aggregate counts. An empty check list means "No checks", not "all passed".
+- **Stacks** — when the PR belongs to a GitHub stack, Overview lists the whole
+  stack above the checks, top first, with each entry's number, state, title and
+  review decision, and marks the one on screen. Selecting an entry — Enter, a
+  click, or `]` and `[` — shows and polls that pull request instead of the
+  branch's own; the header then says `pinned` and `\` goes back. Stacks made in
+  the GitHub UI and with `gh stack` are the same thing, and reading one costs no
+  extra request. Stacks larger than 50 entries show the first 50.
 - **Comments** — top-level PR conversation comments, loaded on demand.
 - **Reviews** — submitted reviews and inline review threads, loaded on demand.
   Unresolved threads come first; threads start collapsed.
@@ -209,7 +219,5 @@ you can download today.
 
 Glance PR only reads from GitHub. Merging, closing, approving, replying, resolving
 threads, requesting reviews, rerunning CI and full diffs are out of scope.
-
-Stacked pull request support is deferred; see [docs/followups.md](docs/followups.md).
 
 Maintainers: see [docs/releasing.md](docs/releasing.md) for the release process.
