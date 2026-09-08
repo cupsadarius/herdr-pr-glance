@@ -29,3 +29,14 @@ absolute columns. Direction is left/right/up/down. The split launcher must
 calculate any approximate 44-column adjustment from current layout geometry.
 Sources: plugins.rs `PluginPaneOpenParams`; panes.rs `PaneResizeParams`; and
 https://github.com/herdrdev/herdr/blob/v0.8.2/src/app/api/panes.rs#L397
+
+Launcher fixtures (synthetic, no real IDs):
+
+- `pane-open.json`: `plugin.pane.open` envelope, `result.plugin_pane.pane.pane_id`
+  per https://github.com/herdrdev/herdr/blob/v0.8.2/src/api/schema/plugins.rs#L364
+- `layout.json`: `pane.layout` envelope with one `right` split 319 columns wide and
+  a 159-column Glance pane, per
+  https://github.com/herdrdev/herdr/blob/v0.8.2/src/api/schema/panes.rs#L447
+- `layout-narrow.json`: an 80-column split, too narrow to keep a 40-column working
+  pane beside 44 columns of Glance; the launcher skips the resize.
+- `layout-zoomed.json`: a zoomed layout with no splits; the launcher skips silently.
