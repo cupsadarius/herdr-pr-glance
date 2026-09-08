@@ -24,6 +24,8 @@ type DiscussionState struct {
 	Data           *model.Discussion
 	Loading        bool
 	Error, Warning error
+	cacheLoading   bool
+	refreshPending bool
 }
 
 // Model is owned by Bubble Tea's Update loop. Commands capture service inputs

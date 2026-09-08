@@ -311,3 +311,31 @@ func TestInitAndLocalChecksCoalesce(t *testing.T) {
 		t.Fatal("initial asynchronous source resolution failed")
 	}
 }
+
+func TestManualRefreshDuringFreshCacheRead(t *testing.T) {
+	m, a, c, now := harness()
+	finish(m, source(m, "main", true))
+	c.hit = true
+	c.entry = model.CacheEntry{FetchedAt: *now, Data: model.Discussion{Complete: true, FetchedAt: *now}}
+	read := apply(m, SelectSectionMsg(model.Reviews))
+	if read == nil {
+		t.Fatal("missing cache read")
+	}
+	if apply(m, RefreshMsg{}) != nil || apply(m, RefreshMsg{}) != nil {
+		t.Fatal("refresh should wait for in-flight read")
+	}
+	fetch := apply(m, read())
+	if fetch == nil {
+		t.Fatal("manual refresh lost behind fresh cache")
+	}
+	if m.Discussions[model.Reviews].Data == nil || !m.Discussions[model.Reviews].Loading {
+		t.Fatal("cache should remain visible while refreshing")
+	}
+	if apply(m, RefreshMsg{}) != nil {
+		t.Fatal("duplicate network request")
+	}
+	finish(m, fetch)
+	if a.discussions != 1 || m.Discussions[model.Reviews].Loading {
+		t.Fatalf("requests=%d", a.discussions)
+	}
+}

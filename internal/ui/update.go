@@ -92,13 +92,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		d.Loading = false
+		d.cacheLoading = false
+		refresh := d.refreshPending
+		d.refreshPending = false
 		d.Warning = x.Err
 		if x.Hit && x.Entry.Data.Complete {
 			data := x.Entry.Data
 			data.FetchedAt = x.Entry.FetchedAt
 			d.Data = &data
 		}
-		if !m.DiscussionStale(x.Section) {
+		if !refresh && !m.DiscussionStale(x.Section) {
 			return m, nil
 		}
 		return m, m.discussion(x.Section, false)
@@ -112,14 +115,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		d.Loading = false
 		d.Error = x.Err
-		if x.Warning != nil {
-			d.Warning = x.Warning
-		}
 		if x.Err != nil {
 			m.rateLimit(x.Err)
 			return m, nil
 		}
 		d.Data = &x.Data
+		// Serialize persistence with source acceptance. A command may finish after
+		// cancellation, so writing before this generation guard can corrupt a newer
+		// cache entry even when the visible result is subsequently discarded.
+		if m.cache != nil {
+			if warning := m.cache.Put(x.Data.PR, x.Section, x.Data, x.Data.FetchedAt); warning != nil {
+				d.Warning = warning
+			}
+		}
 	case SelectSectionMsg:
 		s := model.Section(x)
 		if s != model.Overview && s != model.Comments && s != model.Reviews {

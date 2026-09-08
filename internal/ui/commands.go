@@ -36,10 +36,10 @@ type CacheResult struct {
 	Err        error
 }
 type DiscussionResult struct {
-	Generation   uint64
-	Section      model.Section
-	Data         model.Discussion
-	Err, Warning error
+	Generation uint64
+	Section    model.Section
+	Data       model.Discussion
+	Err        error
 }
 
 func (m *Model) resolve() tea.Cmd {
@@ -79,6 +79,9 @@ func (m *Model) discussion(s model.Section, readCache bool) tea.Cmd {
 		m.Discussions[s] = d
 	}
 	if d.Loading {
+		if !readCache && d.cacheLoading {
+			d.refreshPending = true
+		}
 		return nil
 	}
 	if readCache && d.Data != nil && !m.DiscussionStale(s) {
@@ -87,6 +90,7 @@ func (m *Model) discussion(s model.Section, readCache bool) tea.Cmd {
 	pr, gen, cache, now := *m.Snapshot.PR, m.Generation, m.cache, m.now()
 	if readCache && d.Data == nil && cache != nil {
 		d.Loading = true
+		d.cacheLoading = true
 		return func() tea.Msg { e, hit, err := cache.Get(pr, s, now); return CacheResult{gen, s, e, hit, err} }
 	}
 	if m.github == nil || !m.Source.Visible || now.Before(m.CooldownUntil) {
@@ -98,16 +102,12 @@ func (m *Model) discussion(s model.Section, readCache bool) tea.Cmd {
 		ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 		defer cancel()
 		data, err := g.Discussion(ctx, pr, s)
-		var warning error
 		if err == nil && !data.Complete {
 			err = errors.New("incomplete discussion pagination")
 		}
 		if err == nil {
 			data.FetchedAt = clock()
-			if cache != nil {
-				warning = cache.Put(pr, s, data, data.FetchedAt)
-			}
 		}
-		return DiscussionResult{gen, s, data, err, warning}
+		return DiscussionResult{gen, s, data, err}
 	}
 }
