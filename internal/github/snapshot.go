@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
@@ -37,7 +36,7 @@ func (c Client) Snapshot(ctx context.Context, source model.Source) (model.Snapsh
 	out, err := c.Runner.Run(ctx, cwd, "gh", "pr", "view", "--json", discoveryFields)
 	if err != nil {
 		var e *command.Error
-		if errors.As(err, &e) && e.ExitCode == 1 && e.Stderr == fmt.Sprintf("no pull requests found for branch %q", source.Branch) && source.Branch != "" {
+		if errors.As(err, &e) && e.ExitCode == 1 && isNoPRMessage(e.Stderr) {
 			result.EmptyReason = model.NoPR
 			result.FetchedAt = c.now()
 			return result, nil
@@ -139,6 +138,17 @@ func (c Client) Snapshot(ctx context.Context, source model.Source) (model.Snapsh
 	})
 	result.FetchedAt = c.now()
 	return result, nil
+}
+
+// gh reports the resolved head, which can differ from the local branch.
+// Unquote consumes the complete quoted suffix and rejects appended errors.
+func isNoPRMessage(message string) bool {
+	quoted, ok := strings.CutPrefix(message, "no pull requests found for branch ")
+	if !ok || !strings.HasPrefix(quoted, `"`) {
+		return false
+	}
+	head, err := strconv.Unquote(quoted)
+	return err == nil && head != ""
 }
 
 type checkNode struct {

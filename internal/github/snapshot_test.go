@@ -200,3 +200,36 @@ func TestGraphQLCancellationPreservedWithPartialOutput(t *testing.T) {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
 }
+
+func TestAbsenceResolvedHeadGrammar(t *testing.T) {
+	for _, tc := range []struct {
+		name, stderr string
+		code         int
+		absent       bool
+	}{
+		{"fork", `no pull requests found for branch "alice:topic"`, 1, true},
+		{"upstream", `no pull requests found for branch "renamed-topic"`, 1, true},
+		{"escaped quote", `no pull requests found for branch "topic\"quoted"`, 1, true},
+		{"appended error", `no pull requests found for branch "topic": server failure`, 1, false},
+		{"unclosed", `no pull requests found for branch "topic`, 1, false},
+		{"bad escape", `no pull requests found for branch "topic\q"`, 1, false},
+		{"raw quote", "no pull requests found for branch `topic`", 1, false},
+		{"empty", `no pull requests found for branch ""`, 1, false},
+		{"wrong exit", `no pull requests found for branch "topic"`, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &fixtureRunner{t: t, replies: []reply{{err: &command.Error{Program: "gh", Stderr: tc.stderr, ExitCode: tc.code, Err: errors.New("exit")}}}}
+			got, err := (Client{Runner: r}).Snapshot(context.Background(), model.Source{CWD: "/source", Branch: "topic"})
+			if tc.absent {
+				if err != nil || got.EmptyReason != model.NoPR || got.PR != nil {
+					t.Fatalf("snapshot=%+v err=%v", got, err)
+				}
+			} else {
+				var e *model.FetchError
+				if !errors.As(err, &e) || e.Kind != model.GitHubError {
+					t.Fatalf("expected GitHubError, got %v", err)
+				}
+			}
+		})
+	}
+}
