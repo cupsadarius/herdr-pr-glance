@@ -173,12 +173,17 @@ func mustMkdir(t *testing.T, dir string) {
 // linkRealTools symlinks the POSIX utilities the installer may legitimately use.
 func linkRealTools(t *testing.T, pathDir string) {
 	t.Helper()
-	for _, name := range []string{"tar", "mktemp", "mkdir", "rm", "mv", "cp", "chmod", "awk", "cat", "wc", "dirname", "sed", "tr", "sha256sum", "shasum"} {
+	for _, name := range []string{"tar", "gzip", "mktemp", "mkdir", "rm", "mv", "cp", "chmod", "awk", "cat", "wc", "dirname", "sed", "tr", "sha256sum", "shasum"} {
 		real, err := exec.LookPath(name)
 		if err != nil {
 			continue // optional tool, absent on this host
 		}
 		_ = os.Symlink(real, filepath.Join(pathDir, name))
+	}
+	// GNU tar execs a separate gzip binary for -z, so the installer cannot run
+	// without it on Linux hosts.
+	if _, err := exec.LookPath("gzip"); err != nil {
+		t.Skip("gzip is not installed on this host; the installer requires it")
 	}
 }
 

@@ -35,6 +35,12 @@ A pinned repository tag always installs that tag's exact artifact: the `VERSION`
 in the checkout selects the release, so there is no implicit upgrade and no
 self-updater.
 
+## Install prerequisites
+
+The build hook needs Herdr, git, an authenticated `gh`, a POSIX shell, `tar`,
+`gzip` (GNU tar execs it for `-z`; bsdtar does not, but the check is uniform)
+and one of `sha256sum` or `shasum`.
+
 ## Local dry run
 
 ```sh

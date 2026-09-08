@@ -60,6 +60,9 @@ fi
 
 command -v gh >/dev/null 2>&1 || fail "gh is required to download release assets"
 command -v tar >/dev/null 2>&1 || fail "tar is required to extract release assets"
+# GNU tar shells out to gzip for -z; bsdtar decompresses in-process. Require it
+# either way so the failure is a clear prerequisite error, not a tar child error.
+command -v gzip >/dev/null 2>&1 || fail "gzip is required to extract release assets"
 
 tag="v$version"
 archive="${BINARY}_${version}_${goos}_${goarch}.tar.gz"
