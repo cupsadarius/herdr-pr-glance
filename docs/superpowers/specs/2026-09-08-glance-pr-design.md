@@ -1,6 +1,6 @@
 # Glance PR — design specification
 
-Status: **Proposed; awaiting document review. Implementation has not started.**
+Status: **Approved for implementation; subagent development in progress.**
 
 ## Purpose
 
@@ -118,8 +118,11 @@ Threads are collapsed initially. Enter or clicking toggles the body and replies.
 ## What “current branch” means
 
 1. Capture the invoking working pane and its workspace/tab context.
-2. Within that tab, follow the most recently focused regular working pane. Glance
-   itself and other plugin-owned panes are not source candidates.
+2. Within that tab, follow the most recently focused working pane. Glance itself
+   and plugin pane IDs known from launch responses are excluded. Herdr 0.8.2 does
+   not expose ownership in ordinary pane listings, so arbitrary third-party plugin
+   panes cannot reliably be identified; do not guess from titles or inspect process
+   environments. Candidate directories must still resolve to a Git checkout.
 3. Keep that source while Glance has focus. Reading a review must not change the
    tracked repository to the plugin source directory.
 4. Resolve the working pane's directory through Herdr, preferring its foreground
