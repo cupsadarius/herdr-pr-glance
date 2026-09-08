@@ -405,3 +405,49 @@ func TestBranchChangeStillResets(t *testing.T) {
 			m.Section, len(m.Discussions), gen, m.Generation)
 	}
 }
+
+func sourceInPane(m *Model, pane, root, branch string) tea.Cmd {
+	return apply(m, SourceResult{Generation: m.Generation, Source: model.Source{
+		WorkspaceID: "w1", TabID: "t1", PaneID: pane,
+		CWD: root, Root: root, Branch: branch, HEAD: "abc", Visible: true}})
+}
+
+func TestWorkingPaneSwitchWithinOneCheckoutChangesNothing(t *testing.T) {
+	m, a, _, _ := harness()
+	finish(m, sourceInPane(m, "p1", "/repo", "main"))
+	finish(m, apply(m, SelectSectionMsg(model.Reviews)))
+	m.Offset, m.Cursor = 3, 1
+	gen, summaries, discussions := m.Generation, a.summaries, a.discussions
+
+	finish(m, sourceInPane(m, "p2", "/repo", "main"))
+
+	if m.Section != model.Reviews || m.Discussions[model.Reviews] == nil {
+		t.Fatalf("focusing a sibling pane lost the open section: %q", m.Section)
+	}
+	if m.Generation != gen || m.Snapshot.PR == nil {
+		t.Fatalf("focusing a sibling pane invalidated the snapshot (generation %d -> %d)", gen, m.Generation)
+	}
+	if a.summaries != summaries || a.discussions != discussions {
+		t.Fatalf("focusing a sibling pane fetched: summaries %d, discussions %d", a.summaries, a.discussions)
+	}
+	if m.Offset != 3 || m.Cursor != 1 {
+		t.Fatalf("focusing a sibling pane moved the viewport: offset %d cursor %d", m.Offset, m.Cursor)
+	}
+	if m.Source.PaneID != "p2" {
+		t.Fatalf("the newly focused pane was not recorded: %q", m.Source.PaneID)
+	}
+}
+
+func TestWorkingPaneSwitchToAnotherCheckoutResets(t *testing.T) {
+	m, _, _, _ := harness()
+	finish(m, sourceInPane(m, "p1", "/repo", "main"))
+	finish(m, apply(m, SelectSectionMsg(model.Reviews)))
+	gen := m.Generation
+
+	finish(m, sourceInPane(m, "p2", "/other", "main"))
+
+	if m.Section != model.Overview || len(m.Discussions) != 0 || m.Generation <= gen {
+		t.Fatalf("another checkout must reset: section %q, %d discussions, generation %d -> %d",
+			m.Section, len(m.Discussions), gen, m.Generation)
+	}
+}

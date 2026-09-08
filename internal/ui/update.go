@@ -10,15 +10,16 @@ import (
 )
 
 // sourceIdentity is what makes the tracked pull request a different one. The
-// pane's foreground directory and its HEAD commit are deliberately excluded:
-// moving around the checkout, or committing to the branch, is the same source.
+// working pane, its foreground directory and its HEAD commit are deliberately
+// excluded: focusing a sibling pane in an editor-and-shell layout, moving
+// around the checkout, or committing to the branch, all describe one source.
 type sourceIdentity struct {
-	workspace, tab, pane, root, branch string
-	empty                              model.EmptyReason
+	workspace, tab, root, branch string
+	empty                        model.EmptyReason
 }
 
 func identify(s model.Source) sourceIdentity {
-	return sourceIdentity{s.WorkspaceID, s.TabID, s.PaneID, s.Root, s.Branch, s.EmptyReason}
+	return sourceIdentity{s.WorkspaceID, s.TabID, s.Root, s.Branch, s.EmptyReason}
 }
 func (m *Model) reset() {
 	m.cancel()
