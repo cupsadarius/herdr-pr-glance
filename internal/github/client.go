@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +30,7 @@ func (c Client) now() time.Time {
 	}
 	return time.Now()
 }
-func fetchError(err error) error {
+func (c Client) fetchError(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
@@ -41,8 +44,36 @@ func fetchError(err error) error {
 			kind = model.NetworkError
 		}
 	}
-	return &model.FetchError{Kind: kind, Err: err}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "rate limit") || strings.Contains(message, "rate_limit") || strings.Contains(message, "http 429") || strings.Contains(message, "too many requests") {
+		kind = model.RateLimitError
+	}
+	var retry time.Time
+	if kind == model.RateLimitError {
+		if match := retryAfterHeader.FindStringSubmatch(err.Error()); len(match) > 1 {
+			value := strings.TrimSpace(match[1])
+			if seconds, e := strconv.ParseInt(value, 10, 64); e == nil && seconds >= 0 && seconds <= 86400*365 {
+				retry = c.now().Add(time.Duration(seconds) * time.Second)
+			} else if date, e := http.ParseTime(value); e == nil {
+				retry = date
+			}
+		}
+		if retry.IsZero() {
+			if match := resetHeader.FindStringSubmatch(err.Error()); len(match) > 1 {
+				if seconds, e := strconv.ParseInt(match[1], 10, 64); e == nil {
+					retry = time.Unix(seconds, 0)
+				}
+			}
+		}
+	}
+	return &model.FetchError{Kind: kind, Err: err, RetryAt: retry}
 }
+
+// gh does not always expose response headers; a zero RetryAt asks the UI to
+// use its conservative five-minute fallback.
+var retryAfterHeader = regexp.MustCompile(`(?im)retry-after:\s*([^\r\n]+)`)
+var resetHeader = regexp.MustCompile(`(?im)x-ratelimit-reset:\s*(\d+)`)
+
 func invalid(format string, args ...any) error {
 	return &model.FetchError{Kind: model.InvalidResponseError, Err: fmt.Errorf(format, args...)}
 }
@@ -70,10 +101,10 @@ func (c Client) graphql(ctx context.Context, cwd, host, query string, variables 
 		for _, e := range envelope.Errors {
 			messages = append(messages, e.Message)
 		}
-		return nil, fetchError(fmt.Errorf("GraphQL: %s", strings.Join(messages, "; ")))
+		return nil, c.fetchError(fmt.Errorf("GraphQL: %s", strings.Join(messages, "; ")))
 	}
 	if err != nil {
-		return nil, fetchError(err)
+		return nil, c.fetchError(err)
 	}
 	if decodeErr != nil {
 		return nil, invalid("decode GraphQL: %v", decodeErr)

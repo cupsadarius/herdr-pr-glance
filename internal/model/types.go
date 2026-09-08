@@ -68,6 +68,7 @@ type Snapshot struct {
 type ErrorKind string
 
 const (
+	RateLimitError       ErrorKind = "rate_limit"
 	AuthenticationError  ErrorKind = "authentication"
 	NetworkError         ErrorKind = "network"
 	GitHubError          ErrorKind = "github"
@@ -75,8 +76,10 @@ const (
 )
 
 type FetchError struct {
-	Kind ErrorKind
-	Err  error
+	// RetryAt is the known rate-limit retry time; zero requests a five-minute fallback.
+	RetryAt time.Time
+	Kind    ErrorKind
+	Err     error
 }
 
 func (e *FetchError) Error() string { return string(e.Kind) + ": " + e.Err.Error() }

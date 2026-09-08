@@ -41,7 +41,7 @@ func (c Client) Snapshot(ctx context.Context, source model.Source) (model.Snapsh
 			result.FetchedAt = c.now()
 			return result, nil
 		}
-		return result, fetchError(err)
+		return result, c.fetchError(err)
 	}
 	var pr struct {
 		ID, URL, Title, State, BaseRefName, HeadRefName, ReviewDecision string
