@@ -487,7 +487,7 @@ func (m *Model) commentsBody(w int) ([]string, []bodyItem) {
 func (m *Model) commentLines(c model.Comment, w int, indent string) []string {
 	lines := []string{indent + styled(pal.cyan, "@"+clean(c.Author)) +
 		styled(pal.faint, " · "+ago(m.now().Sub(c.CreatedAt))+" ago")}
-	for _, l := range wrapLines(clean(c.Body), w-len(indent)) {
+	for _, l := range m.md.body(clean(c.Body), w-len(indent)) {
 		lines = append(lines, indent+l)
 	}
 	return append(lines, "")
