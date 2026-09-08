@@ -103,6 +103,30 @@ threads appear first; resolved threads remain accessible.
 Threads are collapsed initially. Enter or clicking toggles the body and replies.
 `o` opens the selected review/thread. Zoom provides room for long discussions.
 
+### Stacks
+
+GitHub reports a stack on the pull request itself (`stack` and `stackEntry`),
+so the fields ride the existing checks query and a summary stays one GraphQL
+request. Stacks created in the GitHub UI and with `gh stack` are the same
+object; a pull request outside a stack reports null for both fields.
+
+When the shown pull request belongs to a stack, Overview lists it after the
+review decision: a `STACK #<number> · <position>/<size> · base <branch>`
+heading, then one row per entry, top of the stack first, as the GitHub UI
+shows it. A row carries the entry's number, a dot coloured by its lifecycle
+(open, draft, merged, closed), its title and its review decision, and the
+entry currently on screen is marked. Only the first 50 entries are fetched;
+a larger stack says how many are hidden and still reports its real size.
+
+Rows are selectable. Enter or a click pins that entry: Glance then shows and
+polls it (`gh pr view <number>` for discovery, same cadence, same rate-limit
+cooldown) instead of the branch's own pull request, and the header says
+`pinned`. `]` moves to the entry above the shown one, `[` to the one below,
+and `\` returns to the branch's own pull request. Pinning changes the tracked
+pull request, so it resets the section and discussions exactly as a branch
+change does. Leaving the checkout or the branch, and an entry disappearing
+from the stack, both clear the pin.
+
 ### Controls
 
 | Input | Action |
@@ -112,6 +136,9 @@ Threads are collapsed initially. Enter or clicking toggles the body and replies.
 | Enter / click thread | Expand or collapse |
 | `r` | Refresh active section, bypassing cache freshness |
 | `o` | Open selected item's URL, falling back to PR URL |
+| Enter / click stack row | Pin that pull request of the stack |
+| `]`, `[` | Pin the entry above or below the shown one |
+| `\` | Unpin: return to the branch's own pull request |
 | `z` | Toggle pane zoom through Herdr |
 | `q` / Escape | Close Glance; overlay restores previous focus |
 

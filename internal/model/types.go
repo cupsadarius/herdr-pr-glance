@@ -53,6 +53,25 @@ type Check struct {
 	State                         CheckState
 }
 type CheckCounts struct{ Failed, Pending, Passed, Neutral, Skipped, Unknown int }
+
+// StackEntry is one pull request of a stack, as GitHub reports it. Position 1
+// is the bottom of the stack, closest to the trunk.
+type StackEntry struct {
+	Position                             int
+	PR                                   PR
+	Title, State, HeadBranch, BaseBranch string
+	ReviewDecision                       string
+	Draft                                bool
+}
+
+// Stack is a GitHub pull request stack. Entries are sorted by Position
+// ascending and hold at most the first page GitHub returns, so Size can
+// exceed len(Entries).
+type Stack struct {
+	Number, Size int
+	BaseBranch   string
+	Entries      []StackEntry
+}
 type Snapshot struct {
 	PR                                          *PR
 	EmptyReason                                 EmptyReason
@@ -63,7 +82,11 @@ type Snapshot struct {
 	Commits, ChangedFiles, Additions, Deletions int
 	Checks                                      []Check
 	CheckCounts                                 CheckCounts
-	FetchedAt                                   time.Time
+	// Stack is nil unless the pull request belongs to a stack; StackPosition
+	// is then its position within it, and zero otherwise.
+	Stack         *Stack
+	StackPosition int
+	FetchedAt     time.Time
 }
 type ErrorKind string
 

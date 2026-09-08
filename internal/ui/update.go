@@ -26,6 +26,7 @@ func (m *Model) reset() {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.Generation++
 	m.Snapshot = model.Snapshot{}
+	m.Pinned, m.branchPR = nil, nil
 	m.Section = model.Overview
 	m.Discussions = map[model.Section]*DiscussionState{}
 	m.SummaryLoading = false
@@ -34,6 +35,33 @@ func (m *Model) reset() {
 	m.failures = 0
 	m.Cursor, m.Offset = 0, 0
 	m.Expanded = map[string]bool{}
+}
+
+// switchPR is the cost of tracking a different pull request: the work in
+// flight belongs to the previous one, and so do the open section, its
+// discussions and the viewport. It is used both when a poll reports a new
+// pull request and when the reader pins one, which may issue no command at all.
+func (m *Model) switchPR() {
+	m.cancel()
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.Generation++
+	m.SummaryLoading = false
+	m.Discussions = map[model.Section]*DiscussionState{}
+	m.Section = model.Overview
+	m.Cursor, m.Offset = 0, 0
+	m.Expanded = map[string]bool{}
+}
+
+func stackHolds(s *model.Stack, pr model.PR) bool {
+	if s == nil {
+		return false
+	}
+	for _, e := range s.Entries {
+		if e.PR == pr {
+			return true
+		}
+	}
+	return false
 }
 func (m *Model) rateLimit(err error) {
 	var e *model.FetchError
@@ -106,16 +134,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		old := m.Snapshot.PR
 		m.Snapshot = x.Data
 		m.Snapshot.FetchedAt = m.now()
+		// A pinned entry that is no longer in the stack cannot be navigated
+		// back to, so the pin returns to the branch's own pull request.
+		if m.Pinned != nil && !stackHolds(x.Data.Stack, *m.Pinned) {
+			m.Pinned, m.branchPR = nil, nil
+		}
 		m.failures = 0
 		m.NextSummary = m.now().Add(time.Minute)
 		if (old == nil) != (x.Data.PR == nil) || (old != nil && x.Data.PR != nil && *old != *x.Data.PR) {
-			m.cancel()
-			m.ctx, m.cancel = context.WithCancel(context.Background())
-			m.Generation++
-			m.Discussions = map[model.Section]*DiscussionState{}
-			m.Section = model.Overview
-			m.Cursor, m.Offset = 0, 0
-			m.Expanded = map[string]bool{}
+			m.switchPR()
 		}
 		m.clamp()
 	case CacheResult:

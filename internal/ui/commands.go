@@ -62,6 +62,15 @@ func (m *Model) summary(manual bool) tea.Cmd {
 	}
 	m.SummaryLoading = true
 	g, s, gen, parent := m.github, m.Source, m.Generation, m.ctx
+	if m.Pinned != nil {
+		pin := *m.Pinned
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+			defer cancel()
+			d, e := g.SnapshotPR(ctx, s, pin)
+			return SummaryResult{gen, d, e}
+		}
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 		defer cancel()

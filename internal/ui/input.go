@@ -2,6 +2,7 @@ package ui
 
 import (
 	"net/url"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
@@ -44,8 +45,82 @@ func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	case "pgup":
 		m.scroll(-m.bodyHeight())
 	case "enter":
-		m.toggleThread()
+		return m.activate()
+	case "]":
+		return m.stackStep(1)
+	case "[":
+		return m.stackStep(-1)
+	case "\\":
+		return m.unpin()
 	}
+	return nil
+}
+
+// stackStep pins the neighbouring entry of the stack: one position up is the
+// pull request built on the shown one, one position down is the one it is
+// built on. At either end there is nothing to move to.
+func (m *Model) stackStep(delta int) tea.Cmd {
+	if m.Snapshot.Stack == nil {
+		return nil
+	}
+	want := m.Snapshot.StackPosition + delta
+	for _, e := range m.Snapshot.Stack.Entries {
+		if e.Position == want {
+			return m.pinPR(e.PR)
+		}
+	}
+	return nil
+}
+
+// pinPR shows another pull request of the stack instead of the branch's own,
+// and refreshes immediately; the shown one is already pinned enough, and the
+// branch's own is what unpinning means.
+func (m *Model) pinPR(pr model.PR) tea.Cmd {
+	if m.Snapshot.PR != nil && *m.Snapshot.PR == pr {
+		return nil
+	}
+	if m.branchPR != nil && *m.branchPR == pr {
+		return m.unpin()
+	}
+	if m.Pinned == nil && m.Snapshot.PR != nil {
+		own := *m.Snapshot.PR
+		m.branchPR = &own
+	}
+	pin := pr
+	m.Pinned = &pin
+	return m.repin()
+}
+
+// unpin returns to the pull request of the working branch.
+func (m *Model) unpin() tea.Cmd {
+	if m.Pinned == nil {
+		return nil
+	}
+	m.Pinned, m.branchPR = nil, nil
+	return m.repin()
+}
+
+// repin refreshes after the reader changed which pull request is shown. The
+// work in flight is for the previous one, and clearing the schedule makes the
+// next tick fetch even when this call cannot: a summary already running, or a
+// rate-limit cooldown, must not leave a pinned header over branch data.
+func (m *Model) repin() tea.Cmd {
+	m.switchPR()
+	m.NextSummary = time.Time{}
+	return m.summary(true)
+}
+
+// activate is what enter and a click do to the selected item: pin a stack
+// entry, or expand a review thread.
+func (m *Model) activate() tea.Cmd {
+	it, ok := m.selected()
+	if !ok {
+		return nil
+	}
+	if it.pin != nil {
+		return m.pinPR(*it.pin)
+	}
+	m.toggleThread(it)
 	return nil
 }
 
@@ -72,8 +147,9 @@ func (m *Model) handleMouse(e tea.Mouse) tea.Cmd {
 		}
 		if r.item >= 0 {
 			m.Cursor = r.item
-			m.toggleThread()
+			cmd := m.activate()
 			m.clamp()
+			return cmd
 		}
 		return nil
 	}
@@ -116,16 +192,15 @@ func (m *Model) selectedURL() string {
 }
 
 func (m *Model) selected() (bodyItem, bool) {
-	_, items := m.body(m.contentWidth())
+	_, items, _ := m.body(m.contentWidth())
 	if m.Cursor < 0 || m.Cursor >= len(items) {
 		return bodyItem{}, false
 	}
 	return items[m.Cursor], true
 }
 
-func (m *Model) toggleThread() {
-	it, ok := m.selected()
-	if !ok || it.threadID == "" {
+func (m *Model) toggleThread(it bodyItem) {
+	if it.threadID == "" {
 		return
 	}
 	if m.Expanded == nil {
@@ -176,13 +251,13 @@ func (m *Model) clampReveal() {
 
 // fit bounds the cursor and reports the body's line count and item spans.
 func (m *Model) fit() (int, [][2]int) {
-	lead, items := m.body(m.contentWidth())
+	lead, items, tail := m.body(m.contentWidth())
 	if m.Cursor >= len(items) {
 		m.Cursor = len(items) - 1
 	}
 	if m.Cursor < 0 {
 		m.Cursor = 0
 	}
-	lines, spans := renderBody(lead, items)
+	lines, spans := renderBody(lead, items, tail)
 	return len(lines), spans
 }

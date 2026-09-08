@@ -1,6 +1,6 @@
 id = "glance.pr"
 name = "Glance PR"
-version = "0.1.1"
+version = "0.1.2"
 min_herdr_version = "0.8.2"
 description = "Current branch's pull request, CI and reviews at a glance"
 platforms = ["linux", "macos"]

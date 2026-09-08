@@ -34,9 +34,17 @@ type footerHint struct {
 // is dropped when the pane is too narrow to list them all.
 var footerHints = []footerHint{{"r refresh", 2}, {"o browser", 3}, {"z zoom", 1}, {"q close", 0}}
 
+// stackedHints replace the list while the pull request is stacked: the stack
+// keys are the ones a reader cannot guess, so they outlive zoom and only the
+// browser and refresh hints are shed before them.
+var stackedHints = []footerHint{{"[ ] stack", 1}, {"r refresh", 3}, {"o browser", 4}, {"z zoom", 2}, {"q close", 0}}
+
 // footerLine fits as many control hints as the width allows, closing last.
-func footerLine(w int) string {
+func footerLine(w int, stacked bool) string {
 	hints := footerHints
+	if stacked {
+		hints = stackedHints
+	}
 	for {
 		texts := make([]string, len(hints))
 		for i, h := range hints {
@@ -72,9 +80,14 @@ type rowTarget struct {
 // or a review thread. Items own the lines they occupy so the row map, the
 // cursor and the scroll offset all agree on the layout.
 type bodyItem struct {
+	// head lines belong to no item: they introduce the group this item starts,
+	// so the cursor and the row map still address the item itself.
+	head     []string
 	lines    []string
 	url      string
 	threadID string
+	// pin is the stack entry this row shows, if any; selecting it pins it.
+	pin *model.PR
 }
 
 // View renders the current state without mutating the model.
@@ -116,7 +129,7 @@ func (m *Model) layoutView() (string, []rowTarget) {
 	if w < minWidth {
 		return styled(pal.faint, narrowText), nil
 	}
-	foot := styleFooter(footerLine(w))
+	foot := styleFooter(footerLine(w, m.Snapshot.Stack != nil))
 	if msg := m.emptyMessage(); msg != "" {
 		out := []string{}
 		for _, l := range m.titleLines(w) {
@@ -271,6 +284,9 @@ func (m *Model) statusSpans() []span {
 		if m.SummaryStale() {
 			add(pal.yellow, "stale")
 		}
+		if m.Pinned != nil {
+			add(pal.yellow, "pinned")
+		}
 	case m.SummaryLoading:
 		add(pal.faint, "Loading…")
 	}
@@ -384,31 +400,116 @@ func reviewDecision(s string) string {
 	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
-// body returns the non-selectable lead lines and the selectable items of the
-// active section, laid out for the given content width.
-func (m *Model) body(w int) ([]string, []bodyItem) {
+// body returns the lead lines, the selectable items and the trailing lines of
+// the active section, laid out for the given content width.
+func (m *Model) body(w int) ([]string, []bodyItem, []string) {
 	switch m.Section {
 	case model.Comments:
-		return m.commentsBody(w)
+		lead, items := m.commentsBody(w)
+		return lead, items, nil
 	case model.Reviews:
-		return m.reviewsBody(w)
+		lead, items := m.reviewsBody(w)
+		return lead, items, nil
 	default:
 		return m.overviewBody(w)
 	}
 }
 
-func (m *Model) overviewBody(w int) ([]string, []bodyItem) {
+func (m *Model) overviewBody(w int) ([]string, []bodyItem, []string) {
 	s := m.Snapshot
+	lead, items, gap := m.stackBody(w)
 	if len(s.Checks) == 0 {
-		return []string{styled(pal.bold, "CHECKS"), styled(pal.faint, "No checks")}, nil
+		return lead, items, append(gap, styled(pal.bold, "CHECKS"), styled(pal.faint, "No checks"))
 	}
 	heading := []span{{text: "CHECKS", style: pal.bold}, {text: "  ", style: pal.none}}
-	lead := wrapSpans(append(heading, countsSpans(s.CheckCounts)...), w)
-	items := make([]bodyItem, 0, len(s.Checks))
-	for _, c := range s.Checks {
-		items = append(items, bodyItem{lines: []string{checkRow(c, w)}, url: c.URL})
+	head := append(gap, wrapSpans(append(heading, countsSpans(s.CheckCounts)...), w)...)
+	for i, c := range s.Checks {
+		item := bodyItem{lines: []string{checkRow(c, w)}, url: c.URL}
+		if i == 0 {
+			item.head = head
+		}
+		items = append(items, item)
 	}
-	return lead, items
+	return lead, items, nil
+}
+
+// stackBody renders the stack this pull request belongs to: a heading, then one
+// row per entry with the top of the stack first, as GitHub shows it. The rows
+// are selectable so the cursor, a click and `o` all address a single entry.
+func (m *Model) stackBody(w int) ([]string, []bodyItem, []string) {
+	s := m.Snapshot
+	if s.Stack == nil {
+		return nil, nil, nil
+	}
+	heading := []span{{text: "STACK", style: pal.bold},
+		{text: fmt.Sprintf(" #%d · %s/%d · base %s", s.Stack.Number, position(s.StackPosition), s.Stack.Size, clean(s.Stack.BaseBranch)), style: pal.faint}}
+	lead := []string{truncateSpans(heading, w)}
+	items := make([]bodyItem, 0, len(s.Stack.Entries))
+	for i := len(s.Stack.Entries) - 1; i >= 0; i-- {
+		e := s.Stack.Entries[i]
+		pin := e.PR
+		// The cursor gutter already points at the row it selects, so the entry
+		// marker stands down there rather than drawing a second arrow.
+		items = append(items, bodyItem{lines: []string{m.stackRow(e, w, m.Cursor == len(items))}, url: e.PR.URL, pin: &pin})
+	}
+	var gap []string
+	if hidden := s.Stack.Size - len(s.Stack.Entries); hidden > 0 {
+		gap = append(gap, styled(pal.faint, fmt.Sprintf("+%d more", hidden)))
+	}
+	return lead, items, append(gap, "")
+}
+
+// stackRow shows one entry: its number, a dot coloured by its lifecycle, its
+// title and its review decision. The entry currently displayed is marked.
+func (m *Model) stackRow(e model.StackEntry, w int, selected bool) string {
+	marker, own := "  ", pal.none
+	if m.showsEntry(e) {
+		own = pal.bold
+		if !selected {
+			marker = "› "
+		}
+	}
+	row := []span{{text: marker, style: pal.bold},
+		{text: "#" + strconv.Itoa(e.PR.Number), style: own},
+		{text: "  ", style: pal.none},
+		{text: "●", style: prStateStyle(entryState(e))},
+		{text: "  ", style: pal.none},
+		{text: strings.ReplaceAll(clean(e.Title), "\n", " "), style: own}}
+	if d := entryDecision(e.ReviewDecision); d != "" {
+		row = append(row, span{text: "  " + d, style: pal.faint})
+	}
+	return truncateSpans(row, w)
+}
+
+// showsEntry reports whether an entry is the pull request on screen.
+func (m *Model) showsEntry(e model.StackEntry) bool {
+	if m.Snapshot.PR != nil && *m.Snapshot.PR == e.PR {
+		return true
+	}
+	return m.Snapshot.StackPosition == e.Position
+}
+
+// position reads an unknown stack position as unknown rather than as zero.
+func position(p int) string {
+	if p < 1 {
+		return "?"
+	}
+	return strconv.Itoa(p)
+}
+
+func entryState(e model.StackEntry) string {
+	if e.Draft && strings.EqualFold(e.State, "OPEN") {
+		return "DRAFT"
+	}
+	if e.State == "" {
+		return "UNKNOWN"
+	}
+	return strings.ToUpper(clean(e.State))
+}
+
+// entryDecision reads a review decision as the quiet tail of a stack row.
+func entryDecision(s string) string {
+	return strings.TrimSpace(strings.ToLower(strings.ReplaceAll(clean(s), "_", " ")))
 }
 
 func checkGlyph(s model.CheckState) string {
@@ -592,20 +693,27 @@ func threadTailSpans(t model.ReviewThread, compact bool) []span {
 	return append(out, span{text: plural(len(t.Comments), "comment"), style: pal.none})
 }
 
-// renderBody flattens lead lines and items into screen lines, marking the
-// cursor in the gutter, and reports each item's [start,end) line span.
-func renderBody(lead []string, items []bodyItem) ([]string, [][2]int) {
-	lines := make([]string, 0, len(lead)+len(items))
+// renderBody flattens lead lines, items and trailing lines into screen lines,
+// and reports each item's [start,end) line span. Head and trailing lines
+// belong to no item, so a click on them selects nothing.
+func renderBody(lead []string, items []bodyItem, tail []string) ([]string, [][2]int) {
+	lines := make([]string, 0, len(lead)+len(items)+len(tail))
 	for _, l := range lead {
 		lines = append(lines, " "+l)
 	}
 	spans := make([][2]int, len(items))
 	for i, it := range items {
+		for _, l := range it.head {
+			lines = append(lines, " "+l)
+		}
 		spans[i][0] = len(lines)
 		for _, l := range it.lines {
 			lines = append(lines, " "+l)
 		}
 		spans[i][1] = len(lines)
+	}
+	for _, l := range tail {
+		lines = append(lines, " "+l)
 	}
 	return lines, spans
 }

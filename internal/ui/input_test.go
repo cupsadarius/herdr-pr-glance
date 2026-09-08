@@ -340,3 +340,95 @@ func TestMouseReplayDoesNotDependOnRendering(t *testing.T) {
 		})
 	}
 }
+
+func TestStackKeysPinTheNeighbouringEntries(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	api := m.github.(*fakeAPI)
+
+	finish(m, apply(m, key("]")))
+	if len(api.pinned) != 1 || api.pinned[0].Number != 3709 {
+		t.Fatalf("] must pin the entry above, got %+v", api.pinned)
+	}
+	if m.Pinned == nil || m.Pinned.Number != 3709 {
+		t.Fatalf("pin=%+v", m.Pinned)
+	}
+
+	stackFixture(m, *now)
+	finish(m, apply(m, key("[")))
+	if len(api.pinned) != 2 || api.pinned[1].Number != 3705 {
+		t.Fatalf("[ must pin the entry below, got %+v", api.pinned)
+	}
+
+	stackFixture(m, *now)
+	m.Snapshot.StackPosition = 3
+	if apply(m, key("]")) != nil {
+		t.Fatal("] at the top of the stack must be a no-op")
+	}
+	m.Snapshot.StackPosition = 1
+	if apply(m, key("[")) != nil {
+		t.Fatal("[ at the bottom of the stack must be a no-op")
+	}
+}
+
+func TestBackslashUnpins(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	api := m.github.(*fakeAPI)
+	finish(m, apply(m, key("]")))
+	if m.Pinned == nil {
+		t.Fatal("nothing pinned")
+	}
+	finish(m, apply(m, key("\\")))
+	if m.Pinned != nil {
+		t.Fatalf("backslash must unpin: %+v", m.Pinned)
+	}
+	if len(api.pinned) != 1 || api.summaries != 2 {
+		t.Fatalf("unpinning must refresh through Snapshot: pinned=%d summaries=%d", len(api.pinned), api.summaries)
+	}
+}
+
+func TestStackKeysAreNoOpsWithoutAStack(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	api := m.github.(*fakeAPI)
+	for _, k := range []string{"]", "[", "\\"} {
+		if apply(m, key(k)) != nil {
+			t.Fatalf("%q must do nothing without a stack", k)
+		}
+	}
+	if m.Pinned != nil || len(api.pinned) != 0 || api.summaries != 0 {
+		t.Fatalf("stack keys fetched without a stack: %+v %d", m.Pinned, api.summaries)
+	}
+}
+
+func TestClickAndOpenOnAStackRow(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	content := ansi.Strip(m.View().Content)
+	y := -1
+	for i, l := range strings.Split(content, "\n") {
+		if strings.Contains(l, "#3705") && strings.Contains(l, "●") {
+			y = i
+		}
+	}
+	if y < 0 {
+		t.Fatalf("no stack row to click:\n%s", content)
+	}
+	var opened []string
+	m.Open = func(u string) error { opened = append(opened, u); return nil }
+	finish(m, apply(m, key("o")))
+	if len(opened) != 1 || opened[0] != "https://github.com/acme/service/pull/3709" {
+		t.Fatalf("o on the first stack row must open its URL, got %v", opened)
+	}
+	cmd := apply(m, click(3, y))
+	if m.Pinned == nil || m.Pinned.Number != 3705 {
+		t.Fatalf("clicking a stack row must pin it: %+v", m.Pinned)
+	}
+	finish(m, cmd)
+	api := m.github.(*fakeAPI)
+	if len(api.pinned) != 1 || api.pinned[0].Number != 3705 {
+		t.Fatalf("clicking a stack row must fetch it once: %+v", api.pinned)
+	}
+}
