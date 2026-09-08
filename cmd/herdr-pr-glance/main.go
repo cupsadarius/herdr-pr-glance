@@ -122,10 +122,11 @@ func browserArgv(url string) []string {
 	return []string{"xdg-open", url}
 }
 
-// excludingResolver keeps the resolver's exclusions in step with the panes the
-// launcher has recorded, so a second Glance pane in the tab (an overlay beside
-// a split) is never mistaken for the working pane. Reading two small files per
-// resolve is cheaper than a stale exclusion list.
+// excludingResolver keeps the resolver's recorded-pane set in step with the
+// launcher's state files, so a second Glance pane in the tab (an overlay beside
+// a split) is never mistaken for the working pane. The set is replaced rather
+// than accumulated, and the resolver only honours it for panes running in the
+// plugin root, so a reused pane ID cannot hide a real working pane.
 type excludingResolver struct {
 	*herdr.Resolver
 	stateDir string
@@ -137,11 +138,14 @@ func (r excludingResolver) Resolve(ctx context.Context) (model.Source, error) {
 	return r.Resolver.Resolve(ctx)
 }
 func (r excludingResolver) exclude() {
-	for _, id := range herdr.RecordedPanes(r.stateDir) {
+	recorded := herdr.RecordedPanes(r.stateDir)
+	kept := make([]string, 0, len(recorded))
+	for _, id := range recorded {
 		if id != r.self {
-			r.Resolver.ExcludePane(id)
+			kept = append(kept, id)
 		}
 	}
+	r.Resolver.SetRecorded(kept)
 }
 
 func view(ctx context.Context) error {

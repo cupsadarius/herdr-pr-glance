@@ -3,6 +3,7 @@ package herdr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -106,13 +107,22 @@ func (l *Launcher) run(ctx context.Context, args ...string) (string, error) {
 }
 
 // Open focuses the tab's recorded Glance pane when it still exists, and
-// otherwise opens a right-hand split, records it and sizes it.
+// otherwise opens a right-hand split, records it and sizes it. Records are read
+// before the snapshot so that dead IDs can be pruned in the same pass.
 func (l *Launcher) Open(ctx context.Context) error {
-	existing, err := l.recorded(ctx)
+	records, overlays := l.records(), l.overlays()
+	live, err := l.sessionPanes(ctx)
 	if err != nil {
-		return err
+		// Without a snapshot a recorded pane cannot be verified; with nothing
+		// recorded the launch can proceed regardless.
+		if records[l.TabID] != "" {
+			return err
+		}
+		l.warn(err)
+	} else {
+		l.warn(l.prune(records, overlays, live))
 	}
-	if existing != "" {
+	if existing := liveRecord(records[l.TabID], l.TabID, live); existing != "" {
 		_, err = l.run(ctx, "plugin", "pane", "focus", existing)
 		return err
 	}
@@ -134,10 +144,31 @@ func (l *Launcher) Open(ctx context.Context) error {
 	return nil
 }
 
+// liveRecord returns the recorded pane only while the session still shows it in
+// the same tab. Ownership is never guessed from titles or paths.
+func liveRecord(pane, tab string, live []Pane) string {
+	if pane == "" {
+		return ""
+	}
+	for _, p := range live {
+		if p.PaneID == pane && p.TabID == tab {
+			return pane
+		}
+	}
+	return ""
+}
+
 // Overlay opens a transient overlay. Herdr places overlays on the active pane
 // and rejects --target-pane for them, so only the placement is sent. Overlays
-// are neither recorded nor resized.
+// are recorded (so a split Glance never treats one as a working pane) but never
+// resized and never tied to a tab.
 func (l *Launcher) Overlay(ctx context.Context) error {
+	records, overlays := l.records(), l.overlays()
+	// Pruning is maintenance: a snapshot failure only leaves the files as they
+	// were, so it neither warns nor blocks the overlay.
+	if live, err := l.sessionPanes(ctx); err == nil {
+		l.warn(l.prune(records, overlays, live))
+	}
 	pane, err := l.openPane(ctx, []string{"--placement", "overlay"})
 	if err != nil {
 		return err
@@ -190,11 +221,25 @@ func (l *Launcher) records() map[string]string {
 	return m
 }
 
-// readJSON leaves the target untouched when the file is missing or corrupt.
+// overlays lists the overlay panes recorded for this state directory.
+func (l *Launcher) overlays() []string {
+	var ids []string
+	readJSON(filepath.Join(l.StateDir, overlaysFile), &ids)
+	return ids
+}
+
+// readJSON zeroes the target when the file is missing or corrupt, so a partial
+// decode never leaves half a record behind.
 func readJSON(path string, target any) {
-	raw, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(raw, target) != nil {
+	raw, readErr := os.ReadFile(path)
+	if readErr == nil && json.Unmarshal(raw, target) == nil {
 		return
+	}
+	switch t := target.(type) {
+	case *map[string]string:
+		*t = map[string]string{}
+	case *[]string:
+		*t = nil
 	}
 }
 func (l *Launcher) writeRecords(m map[string]string) error {
@@ -246,8 +291,7 @@ func (l *Launcher) record(pane string) error {
 // tab never mistakes it for a working pane. Overlays are closed by the user
 // rather than tracked per tab, so the newest few IDs are kept as a plain list.
 func (l *Launcher) recordOverlay(pane string) error {
-	var ids []string
-	readJSON(filepath.Join(l.StateDir, overlaysFile), &ids)
+	ids := l.overlays()
 	kept := []string{pane}
 	for _, id := range ids {
 		if id != pane && id != "" && len(kept) < maxOverlayRecords {
@@ -286,40 +330,54 @@ func RecordedPanes(stateDir string) []string {
 	return ids
 }
 
-// recorded returns the tab's Glance pane when the session still shows it in
-// that tab, dropping the record otherwise. Ownership is never guessed.
-func (l *Launcher) recorded(ctx context.Context) (string, error) {
-	if l.TabID == "" {
-		return "", nil
-	}
-	m := l.records()
-	pane := m[l.TabID]
-	if pane == "" {
-		return "", nil
-	}
+// sessionPanes returns the panes Herdr currently shows.
+func (l *Launcher) sessionPanes(ctx context.Context) ([]Pane, error) {
 	out, err := l.run(ctx, "api", "snapshot")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var envelope snapshotEnvelope
 	if err = json.Unmarshal([]byte(out), &envelope); err != nil {
-		return "", fmt.Errorf("decode Herdr snapshot: %w", err)
+		return nil, fmt.Errorf("decode Herdr snapshot: %w", err)
 	}
 	if envelope.Error != nil {
-		return "", fmt.Errorf("Herdr %s: %s", envelope.Error.Code, envelope.Error.Message)
+		return nil, fmt.Errorf("Herdr %s: %s", envelope.Error.Code, envelope.Error.Message)
 	}
 	if envelope.Result.Snapshot == nil {
-		return "", fmt.Errorf("Herdr snapshot response missing snapshot")
+		return nil, fmt.Errorf("Herdr snapshot response missing snapshot")
 	}
-	for _, p := range envelope.Result.Snapshot.Panes {
-		if p.PaneID == pane && p.TabID == l.TabID {
-			return pane, nil
+	return envelope.Result.Snapshot.Panes, nil
+}
+
+// prune drops recorded panes the session no longer shows. Herdr pane IDs are
+// short handles, so a dead record left behind could later name a live working
+// pane; keeping the files to live IDs removes that risk.
+func (l *Launcher) prune(records map[string]string, overlays []string, live []Pane) error {
+	alive := make(map[string]bool, len(live))
+	for _, p := range live {
+		alive[p.PaneID] = true
+	}
+	var err error
+	dropped := false
+	for tab, pane := range records {
+		if !alive[pane] {
+			delete(records, tab)
+			dropped = true
 		}
 	}
-	// A record that cannot be dropped is harmless: this run opens a new pane.
-	delete(m, l.TabID)
-	l.warn(l.writeRecords(m))
-	return "", nil
+	if dropped {
+		err = l.writeRecords(records)
+	}
+	kept := make([]string, 0, len(overlays))
+	for _, id := range overlays {
+		if alive[id] {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) != len(overlays) {
+		err = errors.Join(err, l.writeJSON(filepath.Join(l.StateDir, overlaysFile), kept))
+	}
+	return err
 }
 
 // resize nudges the new split toward targetColumns. The pane is already open,

@@ -60,6 +60,11 @@ type Resolver struct {
 	mu         sync.Mutex
 	last       string
 	excluded   map[string]bool
+	// recorded holds pane IDs the launcher wrote to its state files. They are
+	// skipped only while the live pane runs in pluginRoot, because Herdr pane
+	// IDs are short handles a later session can reuse for a working pane.
+	recorded   map[string]bool
+	pluginRoot string
 }
 
 func NewResolver(runner Runner, bin string, invocation Invocation, self string, excluded []string) *Resolver {
@@ -72,7 +77,8 @@ func NewResolver(runner Runner, bin string, invocation Invocation, self string, 
 			bin = "herdr"
 		}
 	}
-	r := &Resolver{runner: runner, bin: bin, invocation: invocation, last: invocation.FocusedPaneID, excluded: map[string]bool{}}
+	r := &Resolver{runner: runner, bin: bin, invocation: invocation, last: invocation.FocusedPaneID,
+		excluded: map[string]bool{}, recorded: map[string]bool{}, pluginRoot: os.Getenv("HERDR_PLUGIN_ROOT")}
 	r.excluded[self] = true
 	for _, id := range excluded {
 		r.excluded[id] = true
@@ -80,13 +86,35 @@ func NewResolver(runner Runner, bin string, invocation Invocation, self string, 
 	return r
 }
 func (r *Resolver) ExcludePane(id string) { r.mu.Lock(); defer r.mu.Unlock(); r.excluded[id] = true }
+
+// SetRecorded replaces the launcher's recorded Glance pane IDs. Unlike
+// ExcludePane it forgets IDs that disappear from the records, and it only
+// takes effect for panes actually running in the plugin root.
+func (r *Resolver) SetRecorded(ids []string) {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recorded = m
+}
+
+// isGlance reports a recorded pane that still runs where Herdr starts plugin
+// commands. A reused ID pointing at a real checkout stays selectable.
+func (r *Resolver) isGlance(p Pane) bool {
+	if r.pluginRoot == "" || !r.recorded[p.PaneID] {
+		return false
+	}
+	return p.CWD == r.pluginRoot || p.ForegroundCWD == r.pluginRoot
+}
 func (r *Resolver) Select(snapshot Snapshot) model.Source {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := model.Source{WorkspaceID: r.invocation.WorkspaceID, TabID: r.invocation.TabID, Visible: snapshot.FocusedWorkspaceID == r.invocation.WorkspaceID && snapshot.FocusedTabID == r.invocation.TabID}
 	var candidates []Pane
 	for _, p := range snapshot.Panes {
-		if p.WorkspaceID == s.WorkspaceID && p.TabID == s.TabID && !r.excluded[p.PaneID] {
+		if p.WorkspaceID == s.WorkspaceID && p.TabID == s.TabID && !r.excluded[p.PaneID] && !r.isGlance(p) {
 			candidates = append(candidates, p)
 		}
 	}

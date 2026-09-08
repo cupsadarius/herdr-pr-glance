@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
 
 func body(t *testing.T, name string) string {
@@ -150,7 +152,8 @@ func TestOpenFocusesRecordedPaneInSameTab(t *testing.T) {
 	if n := r.count("plugin pane open") + r.count("pane resize"); n != 0 {
 		t.Fatalf("focus path opened or resized a pane: %q", r.calls)
 	}
-	if got := records(t, l); got["w1:t1"] != "w1:p2" || got["w1:t9"] != "w1:p8" {
+	// The other tab's pane is gone from the session, so the record is pruned.
+	if got := records(t, l); got["w1:t1"] != "w1:p2" || len(got) != 1 {
 		t.Fatalf("records = %v", got)
 	}
 }
@@ -307,7 +310,7 @@ func TestResizeFailuresLeaveThePaneOpen(t *testing.T) {
 
 // Herdr rejects a targeted overlay: "overlay and popup plugin panes target the
 // active pane". The overlay argv therefore carries placement and focus only.
-func TestOverlayNeitherRecordsNorResizes(t *testing.T) {
+func TestOverlayRecordsItselfWithoutTabRecordOrResize(t *testing.T) {
 	r := splitRunner(t, "layout.json")
 	l := launcher(t, r)
 	if err := l.Overlay(context.Background()); err != nil {
@@ -319,8 +322,8 @@ func TestOverlayNeitherRecordsNorResizes(t *testing.T) {
 	if strings.Join(open, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("overlay argv = %q, want %q", open, want)
 	}
-	if n := r.count("api snapshot") + r.count("pane layout") + r.count("pane resize"); n != 0 {
-		t.Fatalf("overlay consulted panes: %q", r.calls)
+	if n := r.count("pane layout") + r.count("pane resize"); n != 0 {
+		t.Fatalf("overlay measured or resized a pane: %q", r.calls)
 	}
 	if _, err := os.Stat(filepath.Join(l.StateDir, "panes.json")); !os.IsNotExist(err) {
 		t.Fatalf("overlay wrote a tab record: %v", err)
@@ -412,5 +415,69 @@ func TestUnreadableRecordsAreTreatedAsAbsent(t *testing.T) {
 	}
 	if got := records(t, l); got["w1:t1"] != "w1:p9" {
 		t.Fatalf("records = %v", got)
+	}
+}
+
+func TestPruningDropsDeadRecordsAndKeepsLiveOnes(t *testing.T) {
+	for _, action := range []string{"open", "overlay"} {
+		r := splitRunner(t, "layout.json")
+		l := launcher(t, r)
+		seed := func(name, contents string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(l.StateDir, name), []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// w1:p2 and w1:p4 are in the session fixture; w1:pX and w1:pY are not.
+		seed("panes.json", `{"w1:t2":"w1:p4","w1:t8":"w1:pX"}`)
+		seed("overlays.json", `["w1:p2","w1:pY"]`)
+		var err error
+		if action == "open" {
+			err = l.Open(context.Background())
+		} else {
+			err = l.Overlay(context.Background())
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+		got := records(t, l)
+		if got["w1:t2"] != "w1:p4" || got["w1:t8"] != "" {
+			t.Fatalf("%s: records = %v", action, got)
+		}
+		var overlays []string
+		readJSON(filepath.Join(l.StateDir, "overlays.json"), &overlays)
+		if action == "open" {
+			if strings.Join(overlays, ",") != "w1:p2" {
+				t.Fatalf("open: overlays = %v", overlays)
+			}
+		} else if strings.Join(overlays, ",") != "w1:p9,w1:p2" {
+			t.Fatalf("overlay: overlays = %v", overlays)
+		}
+	}
+}
+
+func TestRecordedPanesAreExcludedOnlyInThePluginRoot(t *testing.T) {
+	t.Setenv("HERDR_PLUGIN_ROOT", "/plugins/glance")
+	c, snapshot := fixture(t)
+	// w1:p2 is a working pane in /work/other; a stale record naming it must not
+	// hide it, because Herdr reuses short pane IDs across sessions.
+	r := NewResolver(nil, "herdr", c, "w1:p3", nil)
+	r.SetRecorded([]string{"w1:p2", "w1:p3"})
+	snapshot.Panes = snapshot.Panes[1:] // drop w1:p1, leaving w1:p2 and Glance
+	if got := r.Select(snapshot); got.PaneID != "w1:p2" {
+		t.Fatalf("selected %+v, want the reused working pane", got)
+	}
+	// The same ID running in the plugin root is a Glance pane and is skipped.
+	snapshot.Panes[0].CWD, snapshot.Panes[0].ForegroundCWD = "/plugins/glance", ""
+	if got := r.Select(snapshot); got.PaneID != "" || got.EmptyReason != model.NoWorkingPane {
+		t.Fatalf("selected %+v, want no working pane", got)
+	}
+	// Without a plugin root there is nothing to compare against, so records are
+	// ignored and only the pane's own ID is excluded.
+	t.Setenv("HERDR_PLUGIN_ROOT", "")
+	rootless := NewResolver(nil, "herdr", c, "w1:p3", nil)
+	rootless.SetRecorded([]string{"w1:p2"})
+	if got := rootless.Select(snapshot); got.PaneID != "w1:p2" {
+		t.Fatalf("selected %+v, want w1:p2", got)
 	}
 }
