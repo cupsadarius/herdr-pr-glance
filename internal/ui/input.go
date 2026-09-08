@@ -139,31 +139,12 @@ func (m *Model) moveCursor(delta int) {
 	m.clamp()
 }
 
-// scroll moves the viewport and drags the cursor along with it, so paging and
-// the wheel are not fought by the rule that keeps the cursor visible.
+// scroll moves the viewport by rows and leaves the cursor where it is, so the
+// rest of an item taller than the body can be read without losing the
+// selection. The next cursor move brings the selected item back into view.
 func (m *Model) scroll(delta int) {
-	lines, spans := renderBody(m.body(m.contentWidth()))
-	high := m.bodyHeight()
-	off := m.Offset + delta
-	if limit := len(lines) - high; off > limit {
-		off = limit
-	}
-	if off < 0 {
-		off = 0
-	}
-	m.Offset = off
-	if m.Cursor < 0 || m.Cursor >= len(spans) {
-		return
-	}
-	if spans[m.Cursor][1] > off && spans[m.Cursor][0] < off+high {
-		return
-	}
-	for i, s := range spans {
-		if s[1] > off && s[0] < off+high {
-			m.Cursor = i
-			return
-		}
-	}
+	lines, _ := renderBody(m.body(m.contentWidth()))
+	m.Offset = clampOffset(m.Offset+delta, len(lines), m.bodyHeight())
 }
 
 // bodyHeight is the number of body rows the current window leaves.
@@ -188,5 +169,5 @@ func (m *Model) clamp() {
 		m.Cursor = 0
 	}
 	lines, spans := renderBody(lead, items)
-	m.Offset = clampOffset(m.Offset, len(lines), m.bodyHeight(), spans, m.Cursor)
+	m.Offset = revealCursor(m.Offset, len(lines), m.bodyHeight(), spans, m.Cursor)
 }

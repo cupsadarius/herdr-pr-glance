@@ -129,7 +129,7 @@ func (m *Model) render() string {
 	lines, spans := renderBody(m.body(m.contentWidth()))
 	markCursor(lines, spans, m.Cursor)
 	bodyHigh := h - len(head) - 1
-	off := clampOffset(m.Offset, len(lines), bodyHigh, spans, m.Cursor)
+	off := clampOffset(m.Offset, len(lines), bodyHigh)
 	out := make([]string, 0, h)
 	for i, l := range head {
 		for _, t := range l.tabs {
@@ -194,7 +194,7 @@ func (m *Model) headerLines(w int) []headerLine {
 	addWrapped(prioTitle, clean(s.Title))
 	add(prioAuthor, "@"+clean(s.Author)+"  "+headRef(s)+" → "+clean(s.BaseBranch))
 	add(prioBlank, "")
-	add(prioCounts, fmt.Sprintf("%d commits · %d files", s.Commits, s.ChangedFiles))
+	add(prioCounts, plural(s.Commits, "commit")+" · "+plural(s.ChangedFiles, "file"))
 	add(prioDiff, fmt.Sprintf("+%d  -%d", s.Additions, s.Deletions))
 	add(prioReview, "Review: "+reviewDecision(s.ReviewDecision))
 	add(prioBlank, "")
@@ -563,7 +563,7 @@ func threadTail(t model.ReviewThread, compact bool) string {
 	if len(tags) > 0 {
 		tail = "  (" + strings.Join(tags, ", ") + ")"
 	}
-	return tail + fmt.Sprintf("  %d comments", len(t.Comments))
+	return tail + "  " + plural(len(t.Comments), "comment")
 }
 
 // renderBody flattens lead lines and items into screen lines, marking the
@@ -602,22 +602,12 @@ func itemAt(spans [][2]int, line int) int {
 	return -1
 }
 
-func clampOffset(off, total, high int, spans [][2]int, cursor int) int {
+// clampOffset keeps a scroll offset inside the body. It never moves the offset
+// toward the cursor: an explicit scroll must survive the next render, so the
+// rest of an item taller than the body stays reachable.
+func clampOffset(off, total, high int) int {
 	if high <= 0 || total <= high {
 		return 0
-	}
-	if cursor >= 0 && cursor < len(spans) {
-		// Selecting the first item reveals the lead lines above it.
-		start := spans[cursor][0]
-		if cursor == 0 {
-			start = 0
-		}
-		if start < off {
-			off = start
-		}
-		if spans[cursor][1] > off+high {
-			off = spans[cursor][1] - high
-		}
 	}
 	if off > total-high {
 		off = total - high
@@ -626,6 +616,26 @@ func clampOffset(off, total, high int, spans [][2]int, cursor int) int {
 		off = 0
 	}
 	return off
+}
+
+// revealCursor scrolls the least it can to bring the selected item's first line
+// into view. An item taller than the body shows its head, never its tail.
+func revealCursor(off, total, high int, spans [][2]int, cursor int) int {
+	if high <= 0 || cursor < 0 || cursor >= len(spans) {
+		return clampOffset(off, total, high)
+	}
+	// Selecting the first item reveals the lead lines above it.
+	start, end := spans[cursor][0], spans[cursor][1]
+	if cursor == 0 {
+		start = 0
+	}
+	switch {
+	case start < off, start >= off+high:
+		off = start
+	case end-start <= high && end > off+high:
+		off = end - high
+	}
+	return clampOffset(off, total, high)
 }
 
 // clean neutralises remote text: no escape sequences, no control characters,
@@ -674,6 +684,14 @@ func truncatePath(s string, w int) string {
 		return ansi.TruncateLeft(s, width-w+1, "…")
 	}
 	return s
+}
+
+// plural formats a count with its unit, singular at one.
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
 }
 
 func ago(d time.Duration) string {

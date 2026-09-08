@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +171,117 @@ func TestRenderBoundsAcrossSizes(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// bodyRows returns the rendered rows below the tab line, which is where the
+// section body starts once the header has been laid out.
+func bodyRows(content string) []string {
+	rows := strings.Split(content, "\n")
+	for i, r := range rows {
+		if !strings.Contains(r, "Overview") || !strings.Contains(r, "Reviews") {
+			continue
+		}
+		rows = rows[i+1:]
+		for len(rows) > 0 && strings.TrimSpace(rows[0]) == "" {
+			rows = rows[1:]
+		}
+		return rows
+	}
+	return rows
+}
+
+func tallCommentsModel(t *testing.T) *Model {
+	t.Helper()
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width, m.Height = 44, 40
+	var body strings.Builder
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&body, "body line %d of a review that runs well past one screen\n", i)
+	}
+	finish(m, apply(m, SelectSectionMsg(model.Comments)))
+	finish(m, apply(m, DiscussionResult{Generation: m.Generation, Section: model.Comments,
+		Data: model.Discussion{Section: model.Comments, Complete: true, FetchedAt: *now,
+			Comments: []model.Comment{
+				{ID: "c1", Author: "coderabbit", Body: body.String(), CreatedAt: now.Add(-time.Hour)},
+				{ID: "c2", Author: "reviewer", Body: "Short follow-up.", CreatedAt: now.Add(-time.Minute)},
+			}}}))
+	return m
+}
+
+func TestItemTallerThanBodyShowsItsHead(t *testing.T) {
+	m := tallCommentsModel(t)
+	rows := bodyRows(m.View().Content)
+	if !strings.Contains(rows[0], "fetched") || !strings.Contains(rows[1], "@coderabbit") {
+		t.Fatalf("body must open on the head of the first comment:\n%s", strings.Join(rows[:4], "\n"))
+	}
+	if m.Offset != 0 {
+		t.Fatalf("offset %d: a tall item must not be aligned by its tail", m.Offset)
+	}
+	if out := m.View().Content; strings.Contains(out, "body line 119") {
+		t.Fatalf("the tail of the first comment must be off-screen:\n%s", out)
+	}
+}
+
+func TestPagingRevealsTheRestOfATallItem(t *testing.T) {
+	m := tallCommentsModel(t)
+	apply(m, key("pgdown"))
+	if m.Offset != m.bodyHeight() {
+		t.Fatalf("pgdown moved the offset to %d, want %d", m.Offset, m.bodyHeight())
+	}
+	out := m.View().Content
+	if strings.Contains(out, "@coderabbit") {
+		t.Fatalf("pgdown must scroll the author header away:\n%s", out)
+	}
+	if m.Cursor != 0 {
+		t.Fatalf("scrolling must not move the cursor, got %d", m.Cursor)
+	}
+	if strings.Contains(out, "body line 0 ") || !strings.Contains(out, "body line ") {
+		t.Fatalf("pgdown did not reveal the next page:\n%s", out)
+	}
+	apply(m, key("pgup"))
+	if m.Offset != 0 || !strings.Contains(m.View().Content, "@coderabbit") {
+		t.Fatalf("pgup must return to the head, offset %d", m.Offset)
+	}
+}
+
+func TestCursorMovesBetweenTallItems(t *testing.T) {
+	m := tallCommentsModel(t)
+	apply(m, key("j"))
+	if m.Cursor != 1 {
+		t.Fatalf("cursor %d after j", m.Cursor)
+	}
+	if out := m.View().Content; !strings.Contains(out, "@reviewer · 1m ago") {
+		t.Fatalf("j must bring the next item's header into view:\n%s", out)
+	}
+	apply(m, key("k"))
+	if m.Cursor != 0 {
+		t.Fatalf("cursor %d after k", m.Cursor)
+	}
+	rows := bodyRows(m.View().Content)
+	if !strings.Contains(rows[1], "@coderabbit") || m.Offset != 0 {
+		t.Fatalf("k must show the head of the first item again, offset %d:\n%s", m.Offset, rows[0])
+	}
+}
+
+func TestCountsAreSingularAtOne(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 100
+	m.Snapshot.Commits, m.Snapshot.ChangedFiles = 1, 1
+	if out := m.View().Content; !strings.Contains(out, "1 commit · 1 file") {
+		t.Fatalf("counts must be singular at one:\n%s", out)
+	}
+	m, now = viewHarness()
+	reviewsFixture(m, *now)
+	m.Width = 100
+	out := m.View().Content
+	if !strings.Contains(out, "  1 comment") || strings.Contains(out, "1 comments") {
+		t.Fatalf("a single reply must read 1 comment:\n%s", out)
+	}
+	if !strings.Contains(out, "2 comments") {
+		t.Fatalf("two replies must still read 2 comments:\n%s", out)
 	}
 }
 
