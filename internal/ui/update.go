@@ -49,6 +49,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleMouse(x.Mouse())
 	case ActionErrMsg:
 		m.ActionError = x.Err
+		m.clamp()
 	case TickMsg:
 		return m, tea.Batch(m.resolve(), tea.Tick(2*time.Second, func(time.Time) tea.Msg { return TickMsg{} }))
 	case SourceResult:

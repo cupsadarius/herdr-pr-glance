@@ -134,6 +134,19 @@ func assertBounds(t *testing.T, content string, w, h int) {
 	}
 }
 
+// survivors are strings the narrowest supported pane must still show, so the
+// width bound cannot be satisfied by silently truncating the content away.
+var survivors = map[string][]string{
+	"overview":     {"Re-request", "Overview", "unit tests"},
+	"no-checks":    {"Re-request", "Overview", "No checks"},
+	"comments":     {"Re-request", "Comments", "@octocat"},
+	"reviews":      {"Re-request", "Reviews", "handler.go", "view.go"},
+	"reviews-open": {"Re-request", "Reviews", "handler.go", "guard clause"},
+	"no-pane":      {"No working pane"},
+	"no-pr":        {"No PR for this branch"},
+	"cooldown":     {"Re-request", "retry in 97s"},
+}
+
 func TestRenderBoundsAcrossSizes(t *testing.T) {
 	_, now := viewHarness()
 	for name, apply := range fixtures(*now) {
@@ -142,12 +155,58 @@ func TestRenderBoundsAcrossSizes(t *testing.T) {
 				m, _ := viewHarness()
 				apply(m)
 				m.Width, m.Height = w, h
-				assertBounds(t, m.View().Content, w, h)
-				if !strings.Contains(m.View().Content, "r refresh") {
+				out := m.View().Content
+				assertBounds(t, out, w, h)
+				if !strings.Contains(out, "q close") {
 					t.Fatalf("%s %dx%d: footer missing", name, w, h)
+				}
+				if w != 30 || h != 40 {
+					continue
+				}
+				for _, want := range survivors[name] {
+					if !strings.Contains(out, want) {
+						t.Fatalf("%s at %dx%d lost %q:\n%s", name, w, h, want, out)
+					}
 				}
 			}
 		}
+	}
+}
+
+func TestThreadRowKeepsFileNameAtEveryWidth(t *testing.T) {
+	for _, w := range []int{30, 36, 44} {
+		m, now := viewHarness()
+		reviewsFixture(m, *now)
+		m.Width, m.Height = w, 40
+		out := m.View().Content
+		assertBounds(t, out, w, 40)
+		for _, want := range []string{"handler.go", "view.go"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("width %d dropped the thread file name %q:\n%s", w, want, out)
+			}
+		}
+		if !strings.Contains(out, "✓~") {
+			t.Fatalf("width %d lost the resolved and outdated state:\n%s", w, out)
+		}
+	}
+}
+
+func TestBidiAndZeroWidthRunesAreStripped(t *testing.T) {
+	m, now := viewHarness()
+	reviewsFixture(m, *now)
+	d := m.Discussions[model.Reviews].Data
+	d.Threads[1].Path = "internal/ui/\u202egg.exe\u202c/sa\u200bfe.go"
+	d.Reviews[0].Author = "oct\u2066o\u2069cat\ufeff"
+	d.Threads[1].Comments[0].Body = "line\u2028break\u2029and\u200fmore"
+	m.Width = 100
+	out := m.View().Content
+	for _, r := range []rune{0x200b, 0x200f, 0x2028, 0x2029, 0x202c, 0x202e, 0x2066, 0x2069, 0xfeff} {
+		if strings.ContainsRune(out, r) {
+			t.Fatalf("rune %U survived sanitization:\n%q", r, out)
+		}
+	}
+	if !strings.Contains(out, "safe.go") || !strings.Contains(out, "@octocat") {
+		t.Fatalf("sanitization removed visible text:\n%s", out)
 	}
 }
 
@@ -230,9 +289,14 @@ func TestErrorCooldownStaleAndCacheWarning(t *testing.T) {
 
 	m, now = viewHarness()
 	overviewFixture(m, *now)
+	m.Width = 100
 	m.CooldownUntil = now.Add(97 * time.Second)
-	if out := m.View().Content; !strings.Contains(out, "rate limited, retry in 97s") {
-		t.Fatalf("cooldown missing:\n%s", out)
+	if out := m.View().Content; !strings.Contains(out, "refreshed 12s ago · rate limited, retry in 97s") {
+		t.Fatalf("cooldown must keep the refresh age:\n%s", out)
+	}
+	m.Snapshot.FetchedAt = now.Add(-90 * time.Second)
+	if out := m.View().Content; !strings.Contains(out, "refreshed 1m ago · stale · rate limited, retry in 97s") {
+		t.Fatalf("cooldown must keep the age and the stale marker:\n%s", out)
 	}
 
 	m, now = viewHarness()
@@ -296,9 +360,14 @@ func TestReviewThreadsCollapseExpandAndTruncatePaths(t *testing.T) {
 	if !strings.Contains(out, "handler.go:42") || !strings.Contains(out, "…") {
 		t.Fatalf("long path must be left-truncated with the file name visible:\n%s", out)
 	}
-	if !strings.Contains(out, "2 comments") || !strings.Contains(out, "resolved") || !strings.Contains(out, "outdated") {
-		t.Fatalf("thread metadata missing:\n%s", out)
+	if !strings.Contains(out, "2 comments") || !strings.Contains(out, "✓~ 1c") {
+		t.Fatalf("thread metadata missing at width 44:\n%s", out)
 	}
+	m.Width = 100
+	if wide := m.View().Content; !strings.Contains(wide, "2 comments") || !strings.Contains(wide, "(resolved, outdated)") {
+		t.Fatalf("full thread metadata missing at width 100:\n%s", wide)
+	}
+	m.Width = 44
 	if strings.Contains(out, "guard clause") {
 		t.Fatalf("collapsed thread leaked replies:\n%s", out)
 	}

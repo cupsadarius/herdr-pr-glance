@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,12 +13,50 @@ import (
 )
 
 const (
-	minWidth     = 20
-	narrowText   = "too narrow"
-	footerText   = "r refresh  o browser  z zoom  q close"
-	defaultWidth = 44
-	defaultHigh  = 24
+	minWidth = 20
+	// A thread row never gives its path less than minPathWidth columns, and
+	// below compactThread columns the state tail switches to its short form.
+	minPathWidth  = 12
+	compactThread = 40
+	narrowText    = "too narrow"
+	defaultWidth  = 44
+	defaultHigh   = 24
 )
+
+type footerHint struct {
+	text string
+	drop int
+}
+
+// footerHints appear in this order; the higher the drop rank, the sooner a hint
+// is dropped when the pane is too narrow to list them all.
+var footerHints = []footerHint{{"r refresh", 2}, {"o browser", 3}, {"z zoom", 1}, {"q close", 0}}
+
+// footerLine fits as many control hints as the width allows, closing last.
+func footerLine(w int) string {
+	hints := footerHints
+	for {
+		texts := make([]string, len(hints))
+		for i, h := range hints {
+			texts[i] = h.text
+		}
+		for _, sep := range []string{"  ", " "} {
+			if s := strings.Join(texts, sep); ansi.StringWidth(s) <= w {
+				return s
+			}
+		}
+		if len(hints) == 1 {
+			return ansi.Truncate(hints[0].text, w, "…")
+		}
+		worst, idx := -1, 0
+		for i, h := range hints {
+			if h.drop > worst {
+				worst, idx = h.drop, i
+			}
+		}
+		hints = append(append([]footerHint{}, hints[:idx]...), hints[idx+1:]...)
+	}
+}
 
 // rowTarget maps a rendered screen row to what a click on it selects. Tab
 // labels also constrain the column span; body rows accept any column (x1 < 0).
@@ -75,9 +114,13 @@ func (m *Model) render() string {
 	if w < minWidth {
 		return narrowText
 	}
-	foot := ansi.Truncate(footerText, w, "…")
+	foot := footerLine(w)
 	if msg := m.emptyMessage(); msg != "" {
-		out := []string{fitStatus(w, "GLANCE PR", m.statusText()), ""}
+		out := []string{}
+		for _, l := range m.titleLines(w) {
+			out = append(out, l.text)
+		}
+		out = append(out, "")
 		out = append(out, m.errorLines(w)...)
 		out = append(out, wrapLines(msg, w)...)
 		return strings.Join(append(pad(out, w, h), foot), "\n")
@@ -132,7 +175,7 @@ const (
 
 func (m *Model) headerLines(w int) []headerLine {
 	s := m.Snapshot
-	out := []headerLine{{text: fitStatus(w, "GLANCE PR", m.statusText())}}
+	out := m.titleLines(w)
 	add := func(prio int, text string) { out = append(out, headerLine{text: text, prio: prio}) }
 	addWrapped := func(prio int, text string) {
 		for _, l := range wrapLines(text, w) {
@@ -203,23 +246,39 @@ func tabLine(active model.Section) (string, []rowTarget) {
 	return b.String(), spans
 }
 
+// statusText keeps the age of the data even while a cooldown is running: that
+// is exactly when knowing how old the summary is matters most.
 func (m *Model) statusText() string {
 	now := m.now()
+	var parts []string
+	switch {
+	case !m.Snapshot.FetchedAt.IsZero():
+		parts = append(parts, "refreshed "+ago(now.Sub(m.Snapshot.FetchedAt))+" ago")
+		if m.SummaryStale() {
+			parts = append(parts, "stale")
+		}
+	case m.SummaryLoading:
+		parts = append(parts, "Loading…")
+	}
 	if now.Before(m.CooldownUntil) {
 		d := m.CooldownUntil.Sub(now)
-		return fmt.Sprintf("rate limited, retry in %ds", int((d+time.Second-1)/time.Second))
+		parts = append(parts, fmt.Sprintf("rate limited, retry in %ds", int((d+time.Second-1)/time.Second)))
 	}
-	if m.Snapshot.FetchedAt.IsZero() {
-		if m.SummaryLoading {
-			return "Loading…"
-		}
-		return ""
+	return strings.Join(parts, " · ")
+}
+
+// titleLines renders the name and status banner, moving the status onto its own
+// wrapped line when it cannot share the first row.
+func (m *Model) titleLines(w int) []headerLine {
+	status := m.statusText()
+	if status == "" || w-ansi.StringWidth("GLANCE PR")-ansi.StringWidth(status) >= 1 {
+		return []headerLine{{text: fitStatus(w, "GLANCE PR", status)}}
 	}
-	s := "refreshed " + ago(now.Sub(m.Snapshot.FetchedAt)) + " ago"
-	if m.SummaryStale() {
-		s += " · stale"
+	out := []headerLine{{text: ansi.Truncate("GLANCE PR", w, "…")}}
+	for _, l := range wrapLines(status, w) {
+		out = append(out, headerLine{text: l, prio: prioError})
 	}
-	return s
+	return out
 }
 
 func fitStatus(w int, left, right string) string {
@@ -276,7 +335,8 @@ func describeError(err error, w int) []string {
 		return nil
 	}
 	out := wrapLines(clean(err.Error()), w)
-	if fe, ok := err.(*model.FetchError); ok && fe.Kind == model.AuthenticationError {
+	var fe *model.FetchError
+	if errors.As(err, &fe) && fe.Kind == model.AuthenticationError {
 		out = append(out, wrapLines("run: gh auth login", w)...)
 	}
 	return out
@@ -453,19 +513,16 @@ func (m *Model) threadItem(t model.ReviewThread, w int) bodyItem {
 	if t.Line != nil {
 		where += ":" + strconv.Itoa(*t.Line)
 	}
-	var tags []string
-	if t.Resolved {
-		tags = append(tags, "resolved")
+	avail := w - ansi.StringWidth(head)
+	tail := threadTail(t, w < compactThread)
+	if avail-ansi.StringWidth(tail) < minPathWidth {
+		tail = threadTail(t, true)
 	}
-	if t.Outdated {
-		tags = append(tags, "outdated")
+	room := avail - ansi.StringWidth(tail)
+	if room < minPathWidth {
+		room = min(minPathWidth, avail)
+		tail = ansi.Truncate(tail, avail-room, "…")
 	}
-	tail := ""
-	if len(tags) > 0 {
-		tail = "  (" + strings.Join(tags, ", ") + ")"
-	}
-	tail += fmt.Sprintf("  %d comments", len(t.Comments))
-	room := w - ansi.StringWidth(head) - ansi.StringWidth(tail)
 	if room < 1 {
 		room = 1
 	}
@@ -477,6 +534,36 @@ func (m *Model) threadItem(t model.ReviewThread, w int) bodyItem {
 		return bodyItem{lines: lines, url: t.URL, threadID: t.ID}
 	}
 	return bodyItem{lines: append(lines, ""), url: t.URL, threadID: t.ID}
+}
+
+// threadTail is the state and reply count shown after a thread's path. The
+// compact form keeps a narrow row readable: ✓ resolved, ~ outdated, Nc replies.
+func threadTail(t model.ReviewThread, compact bool) string {
+	if compact {
+		flags := ""
+		if t.Resolved {
+			flags += "✓"
+		}
+		if t.Outdated {
+			flags += "~"
+		}
+		if flags != "" {
+			flags += " "
+		}
+		return "  " + flags + strconv.Itoa(len(t.Comments)) + "c"
+	}
+	var tags []string
+	if t.Resolved {
+		tags = append(tags, "resolved")
+	}
+	if t.Outdated {
+		tags = append(tags, "outdated")
+	}
+	tail := ""
+	if len(tags) > 0 {
+		tail = "  (" + strings.Join(tags, ", ") + ")"
+	}
+	return tail + fmt.Sprintf("  %d comments", len(t.Comments))
 }
 
 // renderBody flattens lead lines and items into screen lines, marking the
@@ -542,7 +629,8 @@ func clampOffset(off, total, high int, spans [][2]int, cursor int) int {
 }
 
 // clean neutralises remote text: no escape sequences, no control characters,
-// tabs expanded, line breaks preserved.
+// no invisible or bidirectional-override runes that could disguise a path or a
+// handle, tabs expanded, line breaks preserved.
 func clean(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -553,6 +641,9 @@ func clean(s string) string {
 		case r == '\t':
 			b.WriteString("    ")
 		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+		case r >= 0x200b && r <= 0x200f, r == 0x2028, r == 0x2029:
+		case r >= 0x202a && r <= 0x202e, r >= 0x2060 && r <= 0x2064:
+		case r >= 0x2066 && r <= 0x2069, r == 0xfeff:
 		default:
 			b.WriteRune(r)
 		}
