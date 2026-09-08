@@ -81,3 +81,45 @@ type FetchError struct {
 
 func (e *FetchError) Error() string { return string(e.Kind) + ": " + e.Err.Error() }
 func (e *FetchError) Unwrap() error { return e.Err }
+
+// Section separates independently fetched and cached discussion payloads.
+type Section string
+
+const (
+	Overview Section = "overview"
+	Comments Section = "comments"
+	Reviews  Section = "reviews"
+)
+
+type Comment struct {
+	ID, Author, Body, URL string
+	CreatedAt             time.Time
+}
+type Review struct {
+	Comment
+	State string
+}
+type ReviewThread struct {
+	ID, Path, URL      string
+	Line               *int
+	Resolved, Outdated bool
+	Comments           []Comment
+}
+type Discussion struct {
+	PR        PR
+	Section   Section
+	Comments  []Comment
+	Reviews   []Review
+	Threads   []ReviewThread
+	Complete  bool
+	FetchedAt time.Time
+}
+type CacheEntry struct {
+	SchemaVersion int
+	PR            PR
+	Section       Section
+	FetchedAt     time.Time
+	Data          Discussion
+}
+
+func (e CacheEntry) Fresh(now time.Time) bool { return now.Sub(e.FetchedAt) < 300*time.Second }
