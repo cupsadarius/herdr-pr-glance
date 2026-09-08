@@ -12,13 +12,22 @@ BINARY="herdr-pr-glance"
 MAX_ARCHIVE_BYTES=67108864 # 64 MiB ceiling on the downloaded archive
 
 TMPDIR_WORK=""
+STAGED=""
 
 cleanup() {
 	if [ -n "$TMPDIR_WORK" ] && [ -d "$TMPDIR_WORK" ]; then
 		rm -rf "$TMPDIR_WORK"
 	fi
+	if [ -n "$STAGED" ]; then
+		rm -f "$STAGED"
+	fi
+	return 0
 }
-trap cleanup EXIT HUP INT TERM
+# Signals clean up and exit with the conventional 128+signal status.
+trap cleanup EXIT
+trap 'cleanup; exit 129' HUP
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 fail() {
 	echo "install.sh: $*" >&2
@@ -67,7 +76,9 @@ command -v gzip >/dev/null 2>&1 || fail "gzip is required to extract release ass
 tag="v$version"
 archive="${BINARY}_${version}_${goos}_${goarch}.tar.gz"
 
-TMPDIR_WORK=$(mktemp -d) || fail "cannot create temporary directory"
+# Name the parent explicitly: BSD mktemp ignores TMPDIR for a bare -d.
+TMPDIR_WORK=$(mktemp -d "${TMPDIR:-/tmp}/herdr-pr-glance.XXXXXX") ||
+	fail "cannot create temporary directory"
 download_dir="$TMPDIR_WORK/download"
 extract_dir="$TMPDIR_WORK/extract"
 mkdir -p "$download_dir" "$extract_dir" || fail "cannot create temporary directories"
@@ -93,8 +104,18 @@ actual=$(cd "$download_dir" && $sha_cmd "$archive" | awk '{print $1}')
 [ "$actual" = "$expected" ] ||
 	fail "checksum mismatch for $archive (expected $expected, got $actual)"
 
+# Refuse anything but a regular file, so the archive cannot smuggle in a
+# symlink that redirects the install into an arbitrary path.
+member_type=$(tar -tvzf "$download_dir/$archive" "$BINARY" 2>/dev/null |
+	awk 'NR == 1 { print substr($0, 1, 1) }')
+[ "$member_type" = "-" ] ||
+	fail "archive $archive member $BINARY is not a regular file (type '${member_type:-?}')"
+
 tar -xzf "$download_dir/$archive" -C "$extract_dir" "$BINARY" ||
 	fail "cannot extract $BINARY from $archive"
+if [ -L "$extract_dir/$BINARY" ]; then
+	fail "extracted $BINARY is a symlink"
+fi
 [ -f "$extract_dir/$BINARY" ] || fail "archive $archive does not contain $BINARY"
 
 chmod 0755 "$extract_dir/$BINARY" || fail "cannot make $BINARY executable"
@@ -104,10 +125,11 @@ mkdir -p "$bin_dir" || fail "cannot create $bin_dir"
 
 # Stage inside the destination directory so the final move is an atomic rename
 # on the same filesystem; any earlier failure leaves the old binary untouched.
-staged="$bin_dir/.$BINARY.install.$$"
-rm -f "$staged"
-cp "$extract_dir/$BINARY" "$staged" || { rm -f "$staged"; fail "cannot stage $BINARY in $bin_dir"; }
-chmod 0755 "$staged" || { rm -f "$staged"; fail "cannot make staged $BINARY executable"; }
-mv -f "$staged" "$bin_dir/$BINARY" || { rm -f "$staged"; fail "cannot install $BINARY into $bin_dir"; }
+STAGED="$bin_dir/.$BINARY.install.$$"
+rm -f "$STAGED"
+cp "$extract_dir/$BINARY" "$STAGED" || fail "cannot stage $BINARY in $bin_dir"
+chmod 0755 "$STAGED" || fail "cannot make staged $BINARY executable"
+mv -f "$STAGED" "$bin_dir/$BINARY" || fail "cannot install $BINARY into $bin_dir"
+STAGED="" # the rename consumed it; nothing left for the cleanup trap
 
 echo "install.sh: installed $BINARY $version ($goos/$goarch) into $bin_dir"

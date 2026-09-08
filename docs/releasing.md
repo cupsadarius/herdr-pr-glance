@@ -19,13 +19,17 @@ also requires a completed successful CI run for the tagged commit.
 The installer downloads the exact release named by the checked-out `VERSION`.
 That makes the ordering strict:
 
-1. On a release branch, bump `VERSION` and `herdr-plugin.toml` to the new version
-   and merge that commit. CI must be green for it.
-2. Tag that commit `vX.Y.Z` and push the tag. GoReleaser builds the four archives
-   (`darwin`/`linux` x `amd64`/`arm64`) plus `checksums.txt` and publishes them.
-3. Only after the assets exist, advance the default branch so that
-   `herdr plugin install cupsadarius/herdr-pr-glance` resolves a manifest whose
-   version has matching published artifacts.
+1. On a release branch, bump `VERSION` and `herdr-plugin.toml` to the new version.
+   Push the branch so CI runs and goes green for that commit; do not merge yet.
+2. Tag that same commit `vX.Y.Z` and push the tag.
+3. The release workflow revalidates tag/`VERSION`/manifest agreement and the
+   commit's green CI, then GoReleaser publishes the four archives
+   (`darwin`/`linux` x `amd64`/`arm64`) and `checksums.txt`.
+4. Verify the release page lists all five assets and that
+   `sh scripts/install.sh` from a checkout of the tag installs successfully.
+5. Only then merge (or fast-forward) the default branch to that commit, so
+   `herdr plugin install cupsadarius/herdr-pr-glance` never resolves a manifest
+   version whose artifacts do not yet exist.
 
 Advancing the default branch before the assets are uploaded leaves every fresh
 install failing at the build hook, because `gh release download vX.Y.Z` finds no

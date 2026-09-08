@@ -10,7 +10,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded pull-request runs are cancelled. A branch run must be allowed
+  # to finish, because the release workflow gates on the push run for the exact
+  # commit being tagged and a cancelled run would block the release.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
