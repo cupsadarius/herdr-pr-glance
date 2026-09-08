@@ -5,7 +5,7 @@ min_herdr_version = "0.8.2"
 description = "Current branch's pull request, CI and reviews at a glance"
 platforms = ["linux", "macos"]
 
-# scripts/install.sh arrives with the release automation task.
+# Downloads the prebuilt binary matching VERSION; see docs/releasing.md.
 [[build]]
 command = ["sh", "scripts/install.sh"]
 
