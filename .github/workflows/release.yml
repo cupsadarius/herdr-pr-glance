@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate tag and CI status
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # gh run list needs to read the CI workflow runs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag matches VERSION and the plugin manifest
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version=$(tr -d ' \t\r\n' < VERSION)
+          manifest=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"$/\1/p' herdr-plugin.toml | head -n 1)
+          echo "tag=$tag VERSION=$version manifest=$manifest"
+          if [ "$tag" != "v$version" ]; then
+            echo "tag $tag does not match VERSION $version" >&2
+            exit 1
+          fi
+          if [ "$manifest" != "$version" ]; then
+            echo "herdr-plugin.toml version $manifest does not match VERSION $version" >&2
+            exit 1
+          fi
+
+      # A `workflow_run` trigger cannot gate a tag push (it fires on the branch
+      # run, not the tag), so the gate queries the CI runs recorded for the exact
+      # commit being tagged and requires the `push` run to have succeeded.
+      # Polling covers the case where the tag and the branch push arrive together.
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GITHUB_SHA is the tag object for an annotated tag; resolve the commit.
+          sha=$(git rev-parse "${GITHUB_SHA}^{commit}")
+          echo "tagged commit: $sha"
+          for attempt in $(seq 1 40); do
+            conclusions=$(gh run list --workflow ci.yml --event push --commit "$sha" \
+              --json status,conclusion --jq '.[] | "\(.status):\(.conclusion)"')
+            echo "attempt $attempt: ${conclusions:-<no runs yet>}"
+            if echo "$conclusions" | grep -q '^completed:success$'; then
+              echo "CI is green for $sha"
+              exit 0
+            fi
+            # A cancelled run is not a verdict: a re-run may still succeed, so
+            # keep polling. Only a real verdict is fatal.
+            if echo "$conclusions" | grep -qE '^completed:(failure|timed_out|action_required)$'; then
+              echo "CI failed for $sha" >&2
+              exit 1
+            fi
+            # Four attempts is about two minutes; by then the push run exists.
+            if [ -z "$conclusions" ] && [ "$attempt" -ge 4 ]; then
+              echo "CI never ran for this commit; push the branch first" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "timed out waiting for green CI on $sha" >&2
+          exit 1
+
+  release:
+    name: Publish release artifacts
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only this job may create the release and upload assets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # GoReleaser needs full history for the changelog
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "2.18.1"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

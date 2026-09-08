@@ -1,0 +1,28 @@
+id = "glance.pr"
+name = "Glance PR"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "Current branch's pull request, CI and reviews at a glance"
+platforms = ["linux", "macos"]
+
+# Downloads the prebuilt binary matching VERSION; see docs/releasing.md.
+[[build]]
+command = ["sh", "scripts/install.sh"]
+
+[[actions]]
+id = "open"
+title = "Glance PR: open"
+contexts = ["tab", "pane", "workspace"]
+command = ["./bin/herdr-pr-glance", "open"]
+
+[[actions]]
+id = "overlay"
+title = "Glance PR: overlay"
+contexts = ["tab", "pane", "workspace"]
+command = ["./bin/herdr-pr-glance", "overlay"]
+
+[[panes]]
+id = "view"
+title = "Glance PR"
+placement = "split"
+command = ["./bin/herdr-pr-glance", "view"]
