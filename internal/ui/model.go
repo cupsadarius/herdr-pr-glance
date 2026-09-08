@@ -14,6 +14,7 @@ type SourceResolver interface {
 }
 type GitHub interface {
 	Snapshot(context.Context, model.Source) (model.Snapshot, error)
+	SnapshotPR(context.Context, model.Source, model.PR) (model.Snapshot, error)
 	Discussion(context.Context, model.PR, model.Section) (model.Discussion, error)
 }
 type Cache interface {
@@ -31,8 +32,11 @@ type DiscussionState struct {
 // Model is owned by Bubble Tea's Update loop. Commands capture service inputs
 // and return results; they never read or mutate this state while running.
 type Model struct {
-	Source                     model.Source
-	Snapshot                   model.Snapshot
+	Source   model.Source
+	Snapshot model.Snapshot
+	// Pinned is the stack entry being shown instead of the branch's own pull
+	// request; nil means the branch's own.
+	Pinned                     *model.PR
 	Section                    model.Section
 	Generation                 uint64
 	Discussions                map[model.Section]*DiscussionState

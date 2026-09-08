@@ -48,8 +48,107 @@ func (r *fixtureRunner) Run(ctx context.Context, cwd string, args ...string) (st
 func discovery(host, repo, state string, draft bool) string {
 	return fmt.Sprintf(`{"id":"PR_node","url":"https://%s/%s/pull/7","number":7,"title":"Fix","state":%q,"isDraft":%t,"author":{"login":"alice"},"baseRefName":"main","headRefName":"topic","headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"alice"},"additions":5,"deletions":2,"changedFiles":3,"reviewDecision":"APPROVED"}`, host, repo, state, draft)
 }
-func page(nodes string, more bool, cursor string) string {
-	return fmt.Sprintf(`{"data":{"node":{"commits":{"totalCount":143,"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":%s,"pageInfo":{"hasNextPage":%t,"endCursor":%q}}}}}]}}}}`, nodes, more, cursor)
+func page(nodes string, more bool, cursor string) string { return pageWith("", nodes, more, cursor) }
+
+// pageWith renders one checks page, optionally preceded by the stack fields the
+// same query selects on the pull request node.
+func pageWith(stack, nodes string, more bool, cursor string) string {
+	return fmt.Sprintf(`{"data":{"node":{%s"commits":{"totalCount":143,"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":%s,"pageInfo":{"hasNextPage":%t,"endCursor":%q}}}}}]}}}}`, stack, nodes, more, cursor)
+}
+
+func entryJSON(position, number int, title, state, base, head, decision string, draft bool) string {
+	return fmt.Sprintf(`{"position":%d,"pullRequest":{"id":"PR_%d","number":%d,"url":"https://github.com/o/r/pull/%d","title":%q,"state":%q,"isDraft":%t,"headRefName":%q,"baseRefName":%q,"reviewDecision":%q}}`,
+		position, number, number, number, title, state, draft, head, base, decision)
+}
+
+func stackJSON(number, size int, entries ...string) string {
+	return fmt.Sprintf(`"stackEntry":{"position":2},"stack":{"number":%d,"size":%d,"baseRefName":"main","entries":{"nodes":[%s]}},`,
+		number, size, strings.Join(entries, ","))
+}
+
+func TestStackTravelsWithTheChecksQuery(t *testing.T) {
+	stack := stackJSON(3710, 2,
+		entryJSON(2, 3709, "top change", "OPEN", "feature/bottom", "feature/top", "REVIEW_REQUIRED", true),
+		entryJSON(1, 3705, "bottom change", "MERGED", "main", "feature/bottom", "APPROVED", false))
+	r := &fixtureRunner{t: t, replies: []reply{{out: discovery("github.com", "o/r", "OPEN", false)}, {out: pageWith(stack, `[]`, false, "")}}}
+	got, err := (Client{Runner: r}).Snapshot(context.Background(), model.Source{CWD: "/source", Branch: "topic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("stack must ride the existing query, got %d commands", len(r.calls))
+	}
+	query := strings.Join(r.calls[1], " ")
+	if !strings.Contains(query, "stackEntry{position}") || !strings.Contains(query, "entries(first:50)") {
+		t.Fatalf("checks query does not select the stack: %s", query)
+	}
+	if got.StackPosition != 2 || got.Stack == nil {
+		t.Fatalf("position=%d stack=%+v", got.StackPosition, got.Stack)
+	}
+	if got.Stack.Number != 3710 || got.Stack.Size != 2 || got.Stack.BaseBranch != "main" || len(got.Stack.Entries) != 2 {
+		t.Fatalf("stack=%+v", *got.Stack)
+	}
+	bottom, top := got.Stack.Entries[0], got.Stack.Entries[1]
+	if bottom.Position != 1 || top.Position != 2 {
+		t.Fatalf("entries not sorted by position: %+v", got.Stack.Entries)
+	}
+	want := model.PR{Host: "github.com", Repository: "o/r", Number: 3705, NodeID: "PR_3705", URL: "https://github.com/o/r/pull/3705"}
+	if bottom.PR != want || bottom.Title != "bottom change" || bottom.State != "MERGED" || bottom.Draft || bottom.ReviewDecision != "APPROVED" || bottom.BaseBranch != "main" || bottom.HeadBranch != "feature/bottom" {
+		t.Fatalf("bottom=%+v", bottom)
+	}
+	if top.PR.Number != 3709 || !top.Draft || top.ReviewDecision != "REVIEW_REQUIRED" || top.BaseBranch != "feature/bottom" {
+		t.Fatalf("top=%+v", top)
+	}
+}
+
+func TestPullRequestWithoutStack(t *testing.T) {
+	r := &fixtureRunner{t: t, replies: []reply{{out: discovery("github.com", "o/r", "OPEN", false)}, {out: pageWith(`"stackEntry":null,"stack":null,`, `[]`, false, "")}}}
+	got, err := (Client{Runner: r}).Snapshot(context.Background(), model.Source{CWD: "/source"})
+	if err != nil || got.Stack != nil || got.StackPosition != 0 {
+		t.Fatalf("stack=%+v position=%d err=%v", got.Stack, got.StackPosition, err)
+	}
+}
+
+func TestStackLargerThanOnePageKeepsItsSize(t *testing.T) {
+	entries := make([]string, 0, 50)
+	for i := 1; i <= 50; i++ {
+		entries = append(entries, entryJSON(i, 100+i, "change", "OPEN", "main", "topic", "", false))
+	}
+	r := &fixtureRunner{t: t, replies: []reply{{out: discovery("github.com", "o/r", "OPEN", false)}, {out: pageWith(stackJSON(1, 60, entries...), `[]`, false, "")}}}
+	got, err := (Client{Runner: r}).Snapshot(context.Background(), model.Source{CWD: "/source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stack == nil || got.Stack.Size != 60 || len(got.Stack.Entries) != 50 {
+		t.Fatalf("stack=%+v", got.Stack)
+	}
+}
+
+func TestSnapshotPRDiscoversByNumber(t *testing.T) {
+	stack := stackJSON(3710, 2,
+		entryJSON(2, 3709, "top change", "OPEN", "feature/bottom", "feature/top", "", false),
+		entryJSON(1, 3705, "bottom change", "OPEN", "main", "feature/bottom", "", false))
+	r := &fixtureRunner{t: t, replies: []reply{{out: discovery("github.com", "o/r", "OPEN", false)}, {out: pageWith(stack, `[]`, false, "")}}}
+	pin := model.PR{Host: "github.com", Repository: "o/r", Number: 3705, NodeID: "PR_3705", URL: "https://github.com/o/r/pull/3705"}
+	got, err := (Client{Runner: r}).SnapshotPR(context.Background(), model.Source{CWD: "/source", Branch: "topic"}, pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Join(r.calls[0], " ")
+	if !strings.HasPrefix(argv, "gh pr view 3705 --json ") || strings.Contains(argv, "topic") || strings.Contains(argv, "--repo") {
+		t.Fatalf("discovery argv=%q", argv)
+	}
+	if len(r.calls) != 2 || got.Stack == nil || got.PR == nil {
+		t.Fatalf("calls=%d snapshot=%+v", len(r.calls), got)
+	}
+}
+
+func TestSnapshotPREmptySourceNeedsNoCommand(t *testing.T) {
+	r := &fixtureRunner{t: t}
+	got, err := (Client{Runner: r}).SnapshotPR(context.Background(), model.Source{EmptyReason: model.NoWorkingPane}, model.PR{Number: 1})
+	if err != nil || got.EmptyReason != model.NoWorkingPane || len(r.calls) != 0 {
+		t.Fatalf("snapshot=%+v err=%v calls=%v", got, err, r.calls)
+	}
 }
 func TestSnapshotIdentityStatesAndExactTotals(t *testing.T) {
 	for _, tc := range []struct {

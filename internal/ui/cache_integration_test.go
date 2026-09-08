@@ -81,6 +81,9 @@ type outOfOrderDiscussions struct {
 func (a *outOfOrderDiscussions) Snapshot(context.Context, model.Source) (model.Snapshot, error) {
 	return model.Snapshot{PR: &model.PR{Host: "github.com", Repository: "a/b", Number: 1}}, nil
 }
+func (a *outOfOrderDiscussions) SnapshotPR(context.Context, model.Source, model.PR) (model.Snapshot, error) {
+	panic("unexpected pinned snapshot")
+}
 func (a *outOfOrderDiscussions) Discussion(ctx context.Context, pr model.PR, s model.Section) (model.Discussion, error) {
 	a.calls++
 	body := "new"

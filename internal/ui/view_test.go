@@ -97,6 +97,111 @@ func reviewsFixture(m *Model, now time.Time) {
 	}}
 }
 
+// stackFixture puts the fixture pull request in the middle of a three-entry
+// stack, and teaches the fake API to report the same stack back.
+func stackFixture(m *Model, now time.Time) {
+	overviewFixture(m, now)
+	current := *m.Snapshot.PR
+	stack := &model.Stack{Number: 3710, Size: 3, BaseBranch: "main", Entries: []model.StackEntry{
+		{Position: 1, PR: model.PR{Host: "github.com", Repository: "acme/service", Number: 3705, NodeID: "PR_3705", URL: "https://github.com/acme/service/pull/3705"},
+			Title: "bottom change", State: "MERGED", BaseBranch: "main", HeadBranch: "feature/base", ReviewDecision: "APPROVED"},
+		{Position: 2, PR: current, Title: "Re-request denied approvals when the reviewer list changes",
+			State: "OPEN", BaseBranch: "feature/base", HeadBranch: "feature/retry", ReviewDecision: "CHANGES_REQUESTED"},
+		{Position: 3, PR: model.PR{Host: "github.com", Repository: "acme/service", Number: 3709, NodeID: "PR_3709", URL: "https://github.com/acme/service/pull/3709"},
+			Title: "top change", State: "OPEN", Draft: true, BaseBranch: "feature/retry", HeadBranch: "feature/top", ReviewDecision: "REVIEW_REQUIRED"},
+	}}
+	m.Snapshot.Stack, m.Snapshot.StackPosition = stack, 2
+	if a, ok := m.github.(*fakeAPI); ok {
+		a.stack, a.position = stack, 2
+	}
+}
+
+// stackRowLine returns the rendered stack row for a pull request number.
+func stackRowLine(t *testing.T, content, number string) string {
+	t.Helper()
+	for _, l := range strings.Split(content, "\n") {
+		if p := ansi.Strip(l); strings.Contains(p, number) && strings.Contains(p, "●") {
+			return l
+		}
+	}
+	t.Fatalf("no stack row for %s in:\n%s", number, content)
+	return ""
+}
+
+func TestStackBlockListsEntriesTopFirstAndMarksTheCurrentOne(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	plain := plainView(m)
+	if !strings.Contains(plain, "STACK #3710 · 2/3 · base main") {
+		t.Fatalf("missing stack heading:\n%s", plain)
+	}
+	rows := strings.Join(bodyRows(m.View().Content), "\n")
+	top, current, bottom := strings.Index(rows, "#3709"), strings.Index(rows, "#3630"), strings.Index(rows, "#3705")
+	checks := strings.Index(rows, "CHECKS")
+	if top < 0 || current < 0 || bottom < 0 || checks < 0 {
+		t.Fatalf("stack rows missing:\n%s", rows)
+	}
+	if !(top < current && current < bottom && bottom < checks) {
+		t.Fatalf("stack must render top first, above the checks:\n%s", rows)
+	}
+	for _, want := range []string{"review required", "changes requested", "approved"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("missing review decision %q:\n%s", want, plain)
+		}
+	}
+	// Column 0 is the cursor gutter; the entry marker is the row's own column.
+	marker := func(number string) rune {
+		r := []rune(ansi.Strip(stackRowLine(t, m.View().Content, number)))
+		if len(r) < 2 {
+			t.Fatalf("stack row %s is empty", number)
+		}
+		return r[1]
+	}
+	if marker("#3630") != '›' {
+		t.Fatalf("the shown entry must be marked, got %q", marker("#3630"))
+	}
+	if marker("#3709") == '›' {
+		t.Fatal("only the shown entry is marked")
+	}
+	m.Snapshot.Stack.Size = 5
+	if !strings.Contains(plainView(m), "+2 more") {
+		t.Fatalf("a truncated stack must say how many entries are hidden:\n%s", plainView(m))
+	}
+}
+
+func TestStackRowsCarryStateColors(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	out := m.View().Content
+	if line := styledLine(t, out, "STACK"); !carries(line, sgrBold) || !carries(line, sgrFaint) {
+		t.Errorf("the stack heading must be a bold label with a faint rest: %q", line)
+	}
+	for _, tc := range []struct{ number, sgr string }{{"#3705", sgrMagenta}, {"#3630", sgrGreen}, {"#3709", sgrFaint}} {
+		if line := stackRowLine(t, out, tc.number); !carries(line, tc.sgr) {
+			t.Errorf("%s must carry %q: %q", tc.number, tc.sgr, line)
+		}
+	}
+	if line := stackRowLine(t, out, "#3630"); !carries(line, sgrBold) {
+		t.Errorf("the shown entry must be bold: %q", line)
+	}
+}
+
+func TestStackFooterHint(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Width, m.Height = 100, 40
+	if !strings.Contains(plainView(m), "[ ] stack") {
+		t.Fatalf("a stacked pull request must advertise its keys:\n%s", plainView(m))
+	}
+	m.Snapshot.Stack, m.Snapshot.StackPosition = nil, 0
+	plain := plainView(m)
+	if strings.Contains(plain, "[ ] stack") || strings.Contains(plain, "STACK") {
+		t.Fatalf("an unstacked pull request must show neither hint nor block:\n%s", plain)
+	}
+}
+
 func fixtures(now time.Time) map[string]func(*Model) {
 	return map[string]func(*Model){
 		"overview": func(m *Model) { overviewFixture(m, now) },
@@ -104,6 +209,7 @@ func fixtures(now time.Time) map[string]func(*Model) {
 			overviewFixture(m, now)
 			m.Snapshot.Checks, m.Snapshot.CheckCounts = nil, model.CheckCounts{}
 		},
+		"stack":        func(m *Model) { stackFixture(m, now) },
 		"comments":     func(m *Model) { commentsFixture(m, now) },
 		"reviews":      func(m *Model) { reviewsFixture(m, now) },
 		"reviews-open": func(m *Model) { reviewsFixture(m, now); m.Expanded["t1"] = true },
@@ -142,6 +248,7 @@ func assertBounds(t *testing.T, content string, w, h int) {
 // width bound cannot be satisfied by silently truncating the content away.
 var survivors = map[string][]string{
 	"overview":     {"Re-request", "Overview", "unit tests"},
+	"stack":        {"Re-request", "STACK", "#3705"},
 	"no-checks":    {"Re-request", "Overview", "No checks"},
 	"comments":     {"Re-request", "Comments", "@octocat"},
 	"reviews":      {"Re-request", "Reviews", "handler.go", "view.go"},

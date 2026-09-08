@@ -14,26 +14,63 @@ import (
 )
 
 const discoveryFields = "id,url,number,title,author,state,isDraft,baseRefName,headRefName,headRepository,headRepositoryOwner,additions,deletions,changedFiles,reviewDecision"
-const checksQuery = `query($id:ID!,$cursor:String){node(id:$id){... on PullRequest{commits(last:1){totalCount nodes{commit{statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{name status conclusion detailsUrl} ... on StatusContext{context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}}}`
 
+// stackFields ride the checks query so a summary stays one GraphQL request.
+// Both fields are null for a pull request that belongs to no stack, and the
+// entry page is deliberately not followed: Size records the real total.
+const stackEntries = 50
+const stackFields = `stackEntry{position} stack{number size baseRefName entries(first:50){nodes{position pullRequest{id number url title state isDraft headRefName baseRefName reviewDecision}}}}`
+const checksQuery = `query($id:ID!,$cursor:String){node(id:$id){... on PullRequest{` + stackFields + ` commits(last:1){totalCount nodes{commit{statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{name status conclusion detailsUrl} ... on StatusContext{context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}}}`
+
+// Snapshot reports the pull request of the source checkout's branch.
 func (c Client) Snapshot(ctx context.Context, source model.Source) (model.Snapshot, error) {
-	var result model.Snapshot
+	cwd, early, err := c.begin(ctx, source)
+	if early != nil || err != nil {
+		return earlySnapshot(early), err
+	}
+	return c.snapshot(ctx, cwd, "gh", "pr", "view", "--json", discoveryFields)
+}
+
+// SnapshotPR reports one named pull request instead of the branch's own, so a
+// pinned entry of a stack refreshes on the same cadence. gh resolves a number
+// against the source checkout's repository.
+func (c Client) SnapshotPR(ctx context.Context, source model.Source, pr model.PR) (model.Snapshot, error) {
+	cwd, early, err := c.begin(ctx, source)
+	if early != nil || err != nil {
+		return earlySnapshot(early), err
+	}
+	return c.snapshot(ctx, cwd, "gh", "pr", "view", strconv.Itoa(pr.Number), "--json", discoveryFields)
+}
+
+// begin resolves the checkout to run gh in, or reports the snapshot to return
+// when the source names no pull request to fetch at all.
+func (c Client) begin(ctx context.Context, source model.Source) (string, *model.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
-		return result, err
+		return "", nil, err
 	}
 	if source.EmptyReason != "" {
-		result.EmptyReason = source.EmptyReason
-		result.FetchedAt = c.now()
-		return result, nil
+		return "", &model.Snapshot{EmptyReason: source.EmptyReason, FetchedAt: c.now()}, nil
 	}
 	cwd := source.CWD
 	if cwd == "" {
 		cwd = source.Root
 	}
 	if cwd == "" {
-		return result, invalid("missing source checkout")
+		return "", nil, invalid("missing source checkout")
 	}
-	out, err := c.Runner.Run(ctx, cwd, "gh", "pr", "view", "--json", discoveryFields)
+	return cwd, nil, nil
+}
+
+func earlySnapshot(s *model.Snapshot) model.Snapshot {
+	if s == nil {
+		return model.Snapshot{}
+	}
+	return *s
+}
+
+func (c Client) snapshot(ctx context.Context, cwd string, discoveryArgs ...string) (model.Snapshot, error) {
+	var result model.Snapshot
+	out, err := c.Runner.Run(ctx, cwd, discoveryArgs...)
 	if err != nil {
 		var e *command.Error
 		if errors.As(err, &e) && e.ExitCode == 1 && isNoPRMessage(e.Stderr) {
@@ -53,15 +90,11 @@ func (c Client) Snapshot(ctx context.Context, source model.Source) (model.Snapsh
 	if err := json.Unmarshal([]byte(out), &pr); err != nil {
 		return result, invalid("decode PR: %v", err)
 	}
-	u, err := url.Parse(pr.URL)
+	identity, err := parseIdentity(pr.URL, pr.ID, pr.Number)
 	if err != nil {
-		return result, invalid("invalid PR URL")
+		return result, err
 	}
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if u.Scheme != "https" || u.Host == "" || u.User != nil || len(parts) != 4 || parts[2] != "pull" || parts[3] != strconv.Itoa(pr.Number) || pr.Number < 1 || pr.ID == "" {
-		return result, invalid("invalid PR identity")
-	}
-	result = model.Snapshot{PR: &model.PR{Host: u.Host, Repository: parts[0] + "/" + parts[1], Number: pr.Number, NodeID: pr.ID, URL: pr.URL}, Title: pr.Title, Author: pr.Author.Login, State: pr.State, Draft: pr.IsDraft, BaseBranch: pr.BaseRefName, HeadBranch: pr.HeadRefName, ReviewDecision: pr.ReviewDecision, Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles}
+	result = model.Snapshot{PR: &identity, Title: pr.Title, Author: pr.Author.Login, State: pr.State, Draft: pr.IsDraft, BaseBranch: pr.BaseRefName, HeadBranch: pr.HeadRefName, ReviewDecision: pr.ReviewDecision, Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles}
 	if pr.HeadRepository.Name != "" {
 		result.HeadRepository = pr.HeadRepositoryOwner.Login + "/" + pr.HeadRepository.Name
 	}
@@ -72,13 +105,15 @@ func (c Client) Snapshot(ctx context.Context, source model.Source) (model.Snapsh
 		if cursor != "" {
 			vars = append(vars, "cursor="+cursor)
 		}
-		data, err := c.graphql(ctx, cwd, u.Host, checksQuery, vars...)
+		data, err := c.graphql(ctx, cwd, identity.Host, checksQuery, vars...)
 		if err != nil {
 			return model.Snapshot{}, err
 		}
 		var response struct {
 			Node *struct {
-				Commits *struct {
+				StackEntry *struct{ Position int }
+				Stack      *stackNode
+				Commits    *struct {
 					TotalCount int
 					Nodes      []struct {
 						Commit struct {
@@ -101,6 +136,18 @@ func (c Client) Snapshot(ctx context.Context, source model.Source) (model.Snapsh
 		}
 		if response.Node == nil || response.Node.Commits == nil {
 			return model.Snapshot{}, invalid("missing PR commit connection")
+		}
+		if cursor == "" {
+			if response.Node.StackEntry != nil {
+				result.StackPosition = response.Node.StackEntry.Position
+			}
+			if response.Node.Stack != nil {
+				stack, err := normalizeStack(*response.Node.Stack)
+				if err != nil {
+					return model.Snapshot{}, err
+				}
+				result.Stack = stack
+			}
 		}
 		commits := response.Node.Commits
 		result.Commits = commits.TotalCount
@@ -149,6 +196,56 @@ func isNoPRMessage(message string) bool {
 	}
 	head, err := strconv.Unquote(quoted)
 	return err == nil && head != ""
+}
+
+// parseIdentity rebuilds a pull request identity from the URL GitHub reports,
+// the only place the host and repository are stated together.
+func parseIdentity(rawURL, nodeID string, number int) (model.PR, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return model.PR{}, invalid("invalid PR URL")
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if u.Scheme != "https" || u.Host == "" || u.User != nil || len(parts) != 4 || parts[2] != "pull" || parts[3] != strconv.Itoa(number) || number < 1 || nodeID == "" {
+		return model.PR{}, invalid("invalid PR identity")
+	}
+	return model.PR{Host: u.Host, Repository: parts[0] + "/" + parts[1], Number: number, NodeID: nodeID, URL: rawURL}, nil
+}
+
+type stackNode struct {
+	Number, Size int
+	BaseRefName  string
+	Entries      struct {
+		Nodes []struct {
+			Position    int
+			PullRequest struct {
+				ID, URL, Title, State, HeadRefName, BaseRefName, ReviewDecision string
+				Number                                                          int
+				IsDraft                                                         bool
+			}
+		}
+	}
+}
+
+func normalizeStack(n stackNode) (*model.Stack, error) {
+	stack := &model.Stack{Number: n.Number, Size: n.Size, BaseBranch: n.BaseRefName}
+	for _, e := range n.Entries.Nodes {
+		identity, err := parseIdentity(e.PullRequest.URL, e.PullRequest.ID, e.PullRequest.Number)
+		if err != nil {
+			return nil, err
+		}
+		stack.Entries = append(stack.Entries, model.StackEntry{Position: e.Position, PR: identity,
+			Title: e.PullRequest.Title, State: e.PullRequest.State, HeadBranch: e.PullRequest.HeadRefName,
+			BaseBranch: e.PullRequest.BaseRefName, ReviewDecision: e.PullRequest.ReviewDecision, Draft: e.PullRequest.IsDraft})
+	}
+	if len(stack.Entries) > stackEntries {
+		stack.Entries = stack.Entries[:stackEntries]
+	}
+	sort.SliceStable(stack.Entries, func(i, j int) bool { return stack.Entries[i].Position < stack.Entries[j].Position })
+	if stack.Size < len(stack.Entries) {
+		stack.Size = len(stack.Entries)
+	}
+	return stack, nil
 }
 
 type checkNode struct {

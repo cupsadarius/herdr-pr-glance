@@ -15,12 +15,24 @@ type fakeAPI struct {
 	err                    error
 	complete               bool
 	seen                   context.Context
+	// stack and position are reported by both snapshot calls; pinned records
+	// the identities SnapshotPR was asked for.
+	stack    *model.Stack
+	position int
+	pinned   []model.PR
 }
 
 func (f *fakeAPI) Snapshot(ctx context.Context, s model.Source) (model.Snapshot, error) {
 	f.summaries++
 	f.seen = ctx
-	return model.Snapshot{PR: &model.PR{Host: "github.com", Repository: "a/b", Number: 1}, Title: s.Branch}, f.err
+	return model.Snapshot{PR: &model.PR{Host: "github.com", Repository: "a/b", Number: 1}, Title: s.Branch, Stack: f.stack, StackPosition: f.position}, f.err
+}
+func (f *fakeAPI) SnapshotPR(ctx context.Context, s model.Source, pr model.PR) (model.Snapshot, error) {
+	f.summaries++
+	f.seen = ctx
+	f.pinned = append(f.pinned, pr)
+	p := pr
+	return model.Snapshot{PR: &p, Title: s.Branch, Stack: f.stack, StackPosition: f.position}, f.err
 }
 func (f *fakeAPI) Discussion(ctx context.Context, p model.PR, s model.Section) (model.Discussion, error) {
 	f.discussions++
@@ -206,6 +218,9 @@ func (b *blockedAPI) Snapshot(ctx context.Context, s model.Source) (model.Snapsh
 		<-b.release
 	}
 	return model.Snapshot{Title: s.Branch, PR: &model.PR{Host: "github.com", Repository: "a/b", Number: 1}}, nil
+}
+func (b *blockedAPI) SnapshotPR(context.Context, model.Source, model.PR) (model.Snapshot, error) {
+	panic("unexpected pinned snapshot")
 }
 func (b *blockedAPI) Discussion(context.Context, model.PR, model.Section) (model.Discussion, error) {
 	panic("unexpected discussion")
@@ -448,6 +463,100 @@ func TestWorkingPaneSwitchToAnotherCheckoutResets(t *testing.T) {
 
 	if m.Section != model.Overview || len(m.Discussions) != 0 || m.Generation <= gen {
 		t.Fatalf("another checkout must reset: section %q, %d discussions, generation %d -> %d",
+			m.Section, len(m.Discussions), gen, m.Generation)
+	}
+}
+
+// stackOf builds a two-entry stack whose bottom is the branch's own pull
+// request and whose top is the identity the tests pin.
+func stackOf(entries ...model.StackEntry) *model.Stack {
+	return &model.Stack{Number: 9, Size: len(entries), BaseBranch: "main", Entries: entries}
+}
+
+var pinnedPR = model.PR{Host: "github.com", Repository: "a/b", Number: 2, NodeID: "PR_2", URL: "https://github.com/a/b/pull/2"}
+
+func stackedHarness(t *testing.T) (*Model, *fakeAPI, *time.Time) {
+	t.Helper()
+	m, a, _, now := harness()
+	a.stack = stackOf(
+		model.StackEntry{Position: 1, PR: model.PR{Host: "github.com", Repository: "a/b", Number: 1}, Title: "bottom", State: "OPEN"},
+		model.StackEntry{Position: 2, PR: pinnedPR, Title: "top", State: "OPEN"})
+	a.position = 1
+	finish(m, source(m, "main", true))
+	return m, a, now
+}
+
+func TestPinnedSummaryPollingUsesThePinnedIdentity(t *testing.T) {
+	m, a, now := stackedHarness(t)
+	finish(m, m.pinPR(pinnedPR))
+	if m.Pinned == nil || *m.Pinned != pinnedPR {
+		t.Fatalf("pin=%+v", m.Pinned)
+	}
+	if len(a.pinned) != 1 || a.pinned[0] != pinnedPR || m.Snapshot.PR == nil || *m.Snapshot.PR != pinnedPR {
+		t.Fatalf("pinning must fetch the pinned pull request once: %+v", a.pinned)
+	}
+	*now = now.Add(time.Minute)
+	finish(m, source(m, "main", true))
+	if len(a.pinned) != 2 {
+		t.Fatalf("pinned polling must keep using SnapshotPR, got %d calls", len(a.pinned))
+	}
+}
+
+func TestUnpinReturnsToTheBranchPullRequest(t *testing.T) {
+	m, a, now := stackedHarness(t)
+	finish(m, m.pinPR(pinnedPR))
+	summaries := a.summaries
+	finish(m, m.unpin())
+	if m.Pinned != nil {
+		t.Fatalf("pin survived unpin: %+v", m.Pinned)
+	}
+	if len(a.pinned) != 1 || a.summaries != summaries+1 || m.Snapshot.PR.Number != 1 {
+		t.Fatalf("unpin must fetch the branch pull request: pinned=%d summaries=%d pr=%+v", len(a.pinned), a.summaries, m.Snapshot.PR)
+	}
+	*now = now.Add(time.Minute)
+	finish(m, source(m, "main", true))
+	if len(a.pinned) != 1 {
+		t.Fatalf("polling after unpin must not use SnapshotPR, got %d calls", len(a.pinned))
+	}
+}
+
+func TestSourceChangeClearsThePin(t *testing.T) {
+	m, a, _, _ := harness()
+	a.stack = stackOf(model.StackEntry{Position: 2, PR: pinnedPR, Title: "top"})
+	finish(m, source(m, "main", true))
+	finish(m, m.pinPR(pinnedPR))
+	finish(m, source(m, "other", true))
+	if m.Pinned != nil {
+		t.Fatalf("a source change must clear the pin: %+v", m.Pinned)
+	}
+}
+
+func TestPinClearedWhenTheEntryLeavesTheStack(t *testing.T) {
+	m, a, now := stackedHarness(t)
+	finish(m, m.pinPR(pinnedPR))
+	a.stack = stackOf(model.StackEntry{Position: 1, PR: model.PR{Host: "github.com", Repository: "a/b", Number: 1}, Title: "bottom"})
+	*now = now.Add(time.Minute)
+	finish(m, source(m, "main", true))
+	if m.Pinned != nil {
+		t.Fatalf("a pinned entry that left the stack must be unpinned: %+v", m.Pinned)
+	}
+	a.stack = nil
+	m.Pinned = &pinnedPR
+	*now = now.Add(time.Minute)
+	finish(m, source(m, "main", true))
+	if m.Pinned != nil {
+		t.Fatalf("losing the stack entirely must unpin: %+v", m.Pinned)
+	}
+}
+
+func TestPinningResetsSectionAndDiscussions(t *testing.T) {
+	m, _, now := stackedHarness(t)
+	finish(m, apply(m, SelectSectionMsg(model.Reviews)))
+	gen := m.Generation
+	_ = now
+	finish(m, m.pinPR(pinnedPR))
+	if m.Section != model.Overview || len(m.Discussions) != 0 || m.Generation <= gen {
+		t.Fatalf("pinning must reset like a pull request change: section %q, %d discussions, generation %d -> %d",
 			m.Section, len(m.Discussions), gen, m.Generation)
 	}
 }
