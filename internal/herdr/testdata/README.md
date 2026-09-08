@@ -47,3 +47,18 @@ Launcher fixtures (synthetic, no real IDs):
 
 Resize direction was verified against live Herdr 0.8.2: on the right-hand pane of a
 `right` split, `--direction left` grows the pane and `--direction right` shrinks it.
+
+Rightmost-column fixtures (`pane layout --pane <invoking pane>`), for the target
+Glance splits so that it becomes the tab's right-hand column. They place the area
+at `x = 26, y = 1`, as a real Herdr tab reports, so the right edge is
+`area.x + area.width` and not `area.width`:
+
+- `layout-single.json`: the invoking pane fills the tab, so it is the target.
+- `layout-right-column.json`: the right column is one full-height pane.
+- `layout-right-stacked.json`: the right column holds two panes; the taller wins.
+- `layout-right-tie.json`: equal heights on the right edge; the topmost wins.
+- `layout-right-glance.json`: a recorded Glance pane on the right edge is skipped
+  in favour of the pane below it.
+- `layout-zoomed-tab.json`: a zoomed tab reports one pane covering the area, so
+  the invoking pane is split instead.
+- `layout-empty.json`: no panes at all, another fall back to the invoking pane.

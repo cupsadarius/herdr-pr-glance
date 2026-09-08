@@ -45,10 +45,16 @@ func (r *scriptedRunner) Run(_ context.Context, cwd string, args ...string) (str
 			return r.responses[prefix], err
 		}
 	}
-	for prefix, out := range r.responses {
-		if strings.HasPrefix(line, prefix) {
-			return out, nil
+	// The longest matching prefix wins, so a test can answer one specific
+	// `pane layout --pane X` differently from every other layout call.
+	best, found := "", false
+	for prefix := range r.responses {
+		if strings.HasPrefix(line, prefix) && (!found || len(prefix) > len(best)) {
+			best, found = prefix, true
 		}
+	}
+	if found {
+		return r.responses[best], nil
 	}
 	return "", errors.New("unexpected command: " + line)
 }
@@ -99,8 +105,11 @@ func splitRunner(t *testing.T, layout string) *scriptedRunner {
 		"api snapshot":      body(t, "snapshot.json"),
 		"plugin pane open":  body(t, "pane-open.json"),
 		"plugin pane focus": `{"id":"fixture","result":{"type":"plugin_pane_focused","plugin_pane":{"plugin_id":"glance.pr","entrypoint":"view","pane":{"pane_id":"w1:p2"}}}}`,
-		"pane layout":       body(t, layout),
-		"pane resize":       `{"id":"fixture","result":{}}`,
+		// The invoking pane is the whole tab unless a test says otherwise, so
+		// Glance splits it and the recorded argv stays the simple case.
+		"pane layout --pane w1:p1": body(t, "layout-single.json"),
+		"pane layout":              body(t, layout),
+		"pane resize":              `{"id":"fixture","result":{}}`,
 	}}
 }
 
@@ -523,5 +532,115 @@ func TestRecordedPaneOwnership(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Glance belongs in the rightmost column of the tab, so Open splits the pane on
+// the right edge rather than the invoking pane. Every fixture places the area at
+// x=26, y=1, as real Herdr tabs do, so the edge test must add area.x.
+func TestOpenTargetsTheRightmostPane(t *testing.T) {
+	for _, c := range []struct{ layout, overlays, records, want string }{
+		// A single full-height column, stacked (taller wins) and a tie (topmost).
+		{"layout-right-column.json", "[]", "{}", "w1:p2"},
+		{"layout-right-stacked.json", "[]", "{}", "w1:p2"},
+		{"layout-right-tie.json", "[]", "{}", "w1:p2"},
+		// A recorded Glance pane on the right edge is skipped, whether it is
+		// recorded as an overlay or as another tab's split.
+		{"layout-right-glance.json", `["w1:p3"]`, "{}", "w1:p2"},
+		{"layout-right-glance.json", "[]", `{"w1:t7":"w1:p3"}`, "w1:p2"},
+		// A zoomed tab reports one pane covering the area: split the invoker.
+		{"layout-zoomed-tab.json", "[]", "{}", "w1:p1"},
+		// No panes at all leaves nothing to target.
+		{"layout-empty.json", "[]", "{}", "w1:p1"},
+	} {
+		r := splitRunner(t, "layout.json")
+		r.responses["pane layout --pane w1:p1"] = body(t, c.layout)
+		l := launcher(t, r)
+		for name, contents := range map[string]string{"overlays.json": c.overlays, "panes.json": c.records} {
+			if err := os.WriteFile(filepath.Join(l.StateDir, name), []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := l.Open(context.Background()); err != nil {
+			t.Fatalf("%s: %v", c.layout, err)
+		}
+		want := []string{"/herdr path/custom", "plugin", "pane", "open", "--plugin", "glance.pr", "--entrypoint", "view",
+			"--placement", "split", "--direction", "right", "--target-pane", c.want, "--focus"}
+		if got := r.find("plugin pane open"); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("%s: open argv = %q, want %q", c.layout, got, want)
+		}
+		if got := r.find("pane layout"); strings.Join(got[1:], " ") != "pane layout --pane w1:p1" {
+			t.Fatalf("%s: first layout call = %q", c.layout, got)
+		}
+	}
+}
+
+// Without an invoking pane there is nothing to measure, so the launcher targets
+// the workspace and never reads a layout.
+func TestOpenWithoutAnInvokingPaneTargetsTheWorkspace(t *testing.T) {
+	r := splitRunner(t, "layout.json")
+	l := launcher(t, r)
+	l.TargetPaneID = ""
+	if err := l.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/herdr path/custom", "plugin", "pane", "open", "--plugin", "glance.pr", "--entrypoint", "view",
+		"--placement", "split", "--direction", "right", "--workspace", "w1", "--focus"}
+	if got := r.find("plugin pane open"); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("open argv = %q, want %q", got, want)
+	}
+	if got := r.find("pane layout --pane w1:p1"); got != nil {
+		t.Fatalf("measured a layout without an invoking pane: %q", got)
+	}
+}
+
+func TestOpenFallsBackToTheInvokingPane(t *testing.T) {
+	// A layout that cannot be read leaves the invoking pane as the target, and
+	// warns once without failing the action.
+	r := splitRunner(t, "layout.json")
+	r.failures = map[string]error{"pane layout --pane w1:p1": errors.New("boom")}
+	l := launcher(t, r)
+	var warnings []error
+	l.Warn = func(err error) { warnings = append(warnings, err) }
+	if err := l.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.find("plugin pane open"); got[13] != "w1:p1" {
+		t.Fatalf("open argv = %q, want the invoking pane", got)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one", warnings)
+	}
+
+	// So does a layout with no pane on the right edge of the area.
+	r = splitRunner(t, "layout.json")
+	r.responses["pane layout --pane w1:p1"] = `{"result":{"layout":{"area":{"x":26,"y":1,"width":294,"height":50},` +
+		`"panes":[{"pane_id":"w1:p1","rect":{"x":26,"y":1,"width":159,"height":50}}],"splits":[]}}}`
+	if err := launcher(t, r).Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.find("plugin pane open"); got[13] != "w1:p1" {
+		t.Fatalf("open argv = %q, want the invoking pane", got)
+	}
+}
+
+// A recorded overlay that the session no longer shows is pruned before the
+// target is chosen, so a live right-edge pane that reuses the dead ID is still
+// a candidate. w1:p5 is absent from the session fixture but present in the tab
+// layout: exactly the reuse the pruning protects against.
+func TestSplitTargetUsesPrunedRecords(t *testing.T) {
+	r := splitRunner(t, "layout.json")
+	r.responses["pane layout --pane w1:p1"] = `{"result":{"layout":{"area":{"x":26,"y":1,"width":294,"height":50},` +
+		`"panes":[{"pane_id":"w1:p1","rect":{"x":26,"y":1,"width":159,"height":50}},` +
+		`{"pane_id":"w1:p5","rect":{"x":186,"y":1,"width":134,"height":50}}],"splits":[]}}}`
+	l := launcher(t, r)
+	if err := os.WriteFile(filepath.Join(l.StateDir, "overlays.json"), []byte(`["w1:p5"]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.find("plugin pane open"); got[13] != "w1:p5" {
+		t.Fatalf("open argv = %q, want the reused right-edge pane", got)
 	}
 }

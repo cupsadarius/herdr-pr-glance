@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
 
@@ -90,7 +91,7 @@ func TestCursorMovementAndPaging(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		apply(m, key("up"))
 	}
-	if m.Cursor != 0 || !strings.Contains(m.View().Content, "× unit tests") {
+	if m.Cursor != 0 || !strings.Contains(plainView(m), "× unit tests") {
 		t.Fatalf("cursor %d offset %d must return to the first item", m.Cursor, m.Offset)
 	}
 	apply(m, key("pgdown"))
@@ -172,7 +173,7 @@ func TestClickOnTabSelectsSection(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
 	m.Width = 100
-	content := m.View().Content
+	content := ansi.Strip(m.View().Content)
 	lines := strings.Split(content, "\n")
 	y, x := -1, -1
 	for i, l := range lines {
@@ -216,7 +217,7 @@ func TestClickOnThreadRowSelectsAndToggles(t *testing.T) {
 	m, now := viewHarness()
 	reviewsFixture(m, *now)
 	m.Width, m.Height = 60, 40
-	content := m.View().Content
+	content := ansi.Strip(m.View().Content)
 	y := -1
 	for i, l := range strings.Split(content, "\n") {
 		if strings.Contains(l, "▸") && strings.Contains(l, "handler.go") {

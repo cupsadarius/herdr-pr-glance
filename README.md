@@ -33,6 +33,11 @@ against GitHub: it displays data and opens links.
 The mockup shows content and priority, not exact spacing. Content wraps to the
 pane width and follows terminal resizing.
 
+Colour comes from the terminal's 16 ANSI colours, so Glance follows your theme
+and defines no custom palette: green for passed checks, additions and
+approvals, red for failures, deletions and changes requested, yellow for
+pending checks, stale data and rate limits, cyan for authors and file paths.
+
 ## Prerequisites
 
 Runtime:
@@ -99,7 +104,9 @@ type = "plugin_action"
 command = "glance.pr.open"
 ```
 
-`glance.pr.open` opens or focuses the Glance pane in the current tab.
+`glance.pr.open` opens or focuses the Glance pane in the current tab. Glance
+takes the rightmost column of the tab when that column holds a single pane;
+otherwise it splits the tallest pane on the right edge.
 `glance.pr.overlay` shows it as a temporary zoomed overlay instead of a split;
 Herdr's overlay placement restores the previous focus and zoom when the overlay
 closes.
@@ -126,6 +133,11 @@ Only the up and down arrows are bound; left and right do nothing.
 - **Comments** — top-level PR conversation comments, loaded on demand.
 - **Reviews** — submitted reviews and inline review threads, loaded on demand.
   Unresolved threads come first; threads start collapsed.
+
+Comment and review bodies are rendered as Markdown with Glamour, so headings,
+lists, code blocks and tables keep their shape. Links are shown but are not
+clickable — use `o` to open the selected item in a browser. Very large bodies
+fall back to plain text.
 
 ### Refresh behaviour
 
