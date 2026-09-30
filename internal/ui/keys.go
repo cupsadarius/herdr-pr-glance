@@ -48,3 +48,14 @@ func (m *Model) bindings() keyMap {
 	k.Unpin.SetEnabled(stacked || m.Pinned != nil)
 	return k
 }
+
+// FullHelp groups the bindings for the help screen. Disabled bindings (the
+// stack keys without a stack) are skipped by the help renderer.
+func (k keyMap) FullHelp() [][]bkey.Binding {
+	return [][]bkey.Binding{
+		{k.Overview, k.Comments, k.Reviews, k.Help, k.Quit},
+		{k.Down, k.Up, k.PageDown, k.PageUp, k.Activate},
+		{k.Refresh, k.Open, k.Zoom},
+		{k.Next, k.Prev, k.Unpin},
+	}
+}

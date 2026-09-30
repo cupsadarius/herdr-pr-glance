@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
@@ -219,4 +220,13 @@ func styleFooter(s string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// helpStyles replaces Bubbles' hex defaults with the palette, so the help
+// screen follows the terminal theme like the rest of the pane.
+func helpStyles() help.Styles {
+	return help.Styles{
+		Ellipsis: pal.faint, ShortKey: pal.bold, ShortDesc: pal.faint, ShortSeparator: pal.faint,
+		FullKey: pal.bold, FullDesc: pal.faint, FullSeparator: pal.faint,
+	}
 }

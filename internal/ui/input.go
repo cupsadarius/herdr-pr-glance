@@ -22,10 +22,22 @@ func selectSection(s model.Section) tea.Cmd {
 // handleKey maps a key press to a command, mutating only navigation state.
 func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	keys := m.bindings()
+	if m.ShowHelp {
+		switch {
+		case bkey.Matches(k, keys.Help), k.String() == "esc":
+			m.ShowHelp = false
+		case k.String() == "q", k.String() == "ctrl+c":
+			m.cancel()
+			return tea.Quit
+		}
+		return nil
+	}
 	switch {
 	case bkey.Matches(k, keys.Quit):
 		m.cancel()
 		return tea.Quit
+	case bkey.Matches(k, keys.Help):
+		m.ShowHelp = true
 	case bkey.Matches(k, keys.Overview):
 		return selectSection(model.Overview)
 	case bkey.Matches(k, keys.Comments):
@@ -130,10 +142,14 @@ func (m *Model) activate() tea.Cmd {
 func (m *Model) handleMouse(e tea.Mouse) tea.Cmd {
 	switch e.Button {
 	case tea.MouseWheelUp:
-		m.scroll(-wheelStep)
+		if !m.ShowHelp {
+			m.scroll(-wheelStep)
+		}
 		return nil
 	case tea.MouseWheelDown:
-		m.scroll(wheelStep)
+		if !m.ShowHelp {
+			m.scroll(wheelStep)
+		}
 		return nil
 	case tea.MouseLeft:
 	default:
@@ -145,6 +161,7 @@ func (m *Model) handleMouse(e tea.Mouse) tea.Cmd {
 			continue
 		}
 		if r.tab != "" {
+			m.ShowHelp = false
 			return selectSection(r.tab)
 		}
 		if r.item >= 0 {

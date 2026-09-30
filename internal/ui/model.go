@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
@@ -49,12 +50,17 @@ type Model struct {
 	Width, Height  int
 	Cursor, Offset int
 	Expanded       map[string]bool
+	// ShowHelp replaces the body with the full key list; the selection and
+	// scroll position underneath are left alone.
+	ShowHelp bool
 	// Open and Zoom are host actions injected by the launcher; nil means no-op.
 	Open        func(url string) error
 	Zoom        func() error
 	ActionError error
 	// md memoizes Markdown rendering; it is a cache, not observable state.
-	md        *markdown
+	md *markdown
+	// help renders the full key list; it holds only styles.
+	help      help.Model
 	resolver  SourceResolver
 	github    GitHub
 	cache     Cache
@@ -74,7 +80,10 @@ func New(r SourceResolver, g GitHub, c Cache, now func() time.Time) *Model {
 		now = time.Now
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Model{md: newMarkdown(), resolver: r, github: g, cache: c, now: now, ctx: ctx, cancel: cancel, Section: model.Overview, Discussions: map[model.Section]*DiscussionState{}, Expanded: map[string]bool{}}
+	m := &Model{md: newMarkdown(), resolver: r, github: g, cache: c, now: now, ctx: ctx, cancel: cancel, Section: model.Overview, Discussions: map[model.Section]*DiscussionState{}, Expanded: map[string]bool{}}
+	m.help = help.New()
+	m.help.Styles = helpStyles()
+	return m
 }
 func (m *Model) Init() tea.Cmd { return func() tea.Msg { return TickMsg{} } }
 func (m *Model) SummaryStale() bool {

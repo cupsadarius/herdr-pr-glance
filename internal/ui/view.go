@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	bkey "charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -152,6 +153,12 @@ func (m *Model) layoutView() (string, []rowTarget) {
 			rows = append(rows, t)
 		}
 		out = append(out, ansi.Truncate(l.text, w, "…"))
+	}
+	if m.ShowHelp {
+		for _, l := range m.helpLines() {
+			out = append(out, ansi.Truncate(l, w, "…"))
+		}
+		return strings.Join(append(pad(out, w, h), foot), "\n"), rows
 	}
 	for i := off; i < len(lines) && i-off < bodyHigh; i++ {
 		rows = append(rows, rowTarget{y: len(out), x1: -1, item: itemAt(spans, i)})
@@ -839,4 +846,23 @@ func ago(d time.Duration) string {
 	default:
 		return strconv.Itoa(int(d/(24*time.Hour))) + "d"
 	}
+}
+
+// helpLines renders each help group as its own block: the pane is too narrow
+// for Bubbles' side-by-side columns.
+func (m *Model) helpLines() []string {
+	var out []string
+	for _, g := range m.bindings().FullHelp() {
+		block := m.help.FullHelpView([][]bkey.Binding{g})
+		if block == "" {
+			continue
+		}
+		if len(out) > 0 {
+			out = append(out, "")
+		}
+		for _, l := range strings.Split(block, "\n") {
+			out = append(out, " "+l)
+		}
+	}
+	return out
 }
