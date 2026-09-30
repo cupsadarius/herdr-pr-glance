@@ -1,7 +1,7 @@
 # Glance pane redesign
 
 Date: 2026-09-30
-Status: approved in brainstorming, pending spec review
+Status: approved; implemented on feat/pane-redesign
 
 ## Goal
 
@@ -142,18 +142,18 @@ compare the cursor with the entry's index in the whole body, not with
 
 | File | Responsibility |
 |---|---|
-| `internal/ui/keys.go` (new) | `keyMap` of `key.Binding`s for every existing action (`q`/`esc`/`ctrl+c`, `1-3`, `r`, `o`, `z`, `j`/`down`, `k`/`up`, `pgup/pgdown`, `enter`, `[` `]`, `\`) plus `?`. Implements `ShortHelp` / `FullHelp`. Stack bindings are disabled when there is no stack. |
+| `internal/ui/keys.go` (new) | `keyMap` of `key.Binding`s for every existing action (`q`/`esc`/`ctrl+c`, `1-3`, `r`, `o`, `z`, `j`/`down`, `k`/`up`, `pgup/pgdown`, `enter`, `[` `]`, `\`) plus `?`. Has `FullHelp` and `footerHints`; it does not implement `help.KeyMap` (no `ShortHelp`), because only `FullHelpView` is used. Stack bindings are disabled when there is no stack. |
 | `internal/ui/input.go` | `handleKey` switches on `key.Matches` instead of raw strings; behaviour otherwise unchanged. |
-| `internal/ui/style.go` | Adds `badge(state)` and the tab styles. Palette unchanged. `styleFooter` removed. |
+| `internal/ui/style.go` | Adds `badge(state)` and the tab styles. Palette unchanged. `styleFooter` is kept: it bolds single-rune keys, including `[`, `]` and `?`. |
 | `internal/ui/checks.go` (new) | CI block: heading, bar, listed rows, fold row, expanded rows. Moves check rendering out of `view.go`. |
-| `internal/ui/view.go` | Header, tab bar, section order, Review line, stack heading, full-help body. `footerLine` keeps its drop-rank fitting but takes its hints from the `ShortHelp` bindings. |
+| `internal/ui/view.go` | Header, tab bar, section order, Review line, stack heading, full-help body. `footerLine` keeps its drop-rank fitting but takes its hints from `keyMap.footerHints`. |
 | `internal/ui/model.go` | Adds `help help.Model`, `spin spinner.Model` and `ShowHelp bool`. |
 | `go.mod` | `go get charm.land/bubbles/v2` (v2.2.x). |
 
 ### Bubbles usage
 
 - `key`: every binding, its keys and its help text.
-- Footer: `ShortHelp` returns, in display order, `[ ] stack` (only with a
+- Footer: `keyMap.footerHints` returns, in display order, `[ ] stack` (only with a
   stack), `r refresh`, `o browser`, `z zoom`, `? help`, `q close`.
   `footerLine`'s existing fitting stays: when the pane is too narrow, hints are
   dropped by rank, and `q close` is never dropped. Drop order (first dropped
@@ -172,6 +172,17 @@ compare the cursor with the entry's index in the whole body, not with
 - Bubbles' default `help` and `spinner` styles use hex/adaptive colours; they
   are overridden with the palette's ANSI styles (keys bold, descriptions faint,
   spinner yellow).
+
+Recorded deviations from the first draft:
+
+- `styleFooter` is kept, and the footer takes its hints from
+  `keyMap.footerHints` rather than `ShortHelp`; `keyMap` does not implement
+  `help.KeyMap`.
+- The selection is re-anchored by identity across refreshes (the fold row, a
+  stack PR, a check URL), since the body's shape follows check states. A lost
+  check falls back to the fold row.
+- `busy()` is false in hidden tabs: summary polling stops there, so a stale
+  pending check would otherwise spin forever.
 
 ## Behaviour
 
