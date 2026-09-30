@@ -2,6 +2,7 @@ package ui
 
 import (
 	"net/url"
+	"strconv"
 	"time"
 
 	bkey "charm.land/bubbles/v2/key"
@@ -125,7 +126,7 @@ func (m *Model) repin() tea.Cmd {
 }
 
 // activate is what enter and a click do to the selected item: pin a stack
-// entry, or expand a review thread.
+// entry, toggle the CI fold row, or expand a review thread.
 func (m *Model) activate() tea.Cmd {
 	it, ok := m.selected()
 	if !ok {
@@ -220,6 +221,33 @@ func (m *Model) selectedURL() string {
 		return m.Snapshot.PR.URL
 	}
 	return ""
+}
+
+// anchor is a key that names an item across snapshots, so a refresh that
+// reorders the body keeps the selection on the same thing. Empty means none.
+func anchor(it bodyItem) string {
+	switch {
+	case it.fold:
+		return "fold"
+	case it.pin != nil:
+		return "pr:" + it.pin.Repository + "#" + strconv.Itoa(it.pin.Number)
+	}
+	return it.url
+}
+
+// reanchor moves the cursor to the item with the given anchor, if the body
+// still has one.
+func (m *Model) reanchor(want string) {
+	if want == "" {
+		return
+	}
+	_, items, _ := m.body(m.contentWidth())
+	for i, it := range items {
+		if anchor(it) == want {
+			m.Cursor = i
+			return
+		}
+	}
 }
 
 func (m *Model) selected() (bodyItem, bool) {

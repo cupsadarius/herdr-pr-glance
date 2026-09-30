@@ -810,7 +810,7 @@ func TestColorLeavesTheLayoutUnchanged(t *testing.T) {
 func TestCheckRowsAndCountsCarryStateColors(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
-	m.Expanded["checks"] = true
+	m.Expanded[foldKey] = true
 	m.Width, m.Height = 100, 40
 	out := m.View().Content
 	for _, tc := range []struct{ name, sgr string }{

@@ -166,3 +166,38 @@ func TestOpenOnTheFoldRowDoesNothing(t *testing.T) {
 		t.Fatalf("o on the fold row must not open anything, opened %q", opened)
 	}
 }
+
+func TestSelectionFollowsTheFoldRowAcrossARefresh(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Width, m.Height = 100, 60
+	m.Cursor = 5 // the fold row; the first stack row follows it
+	next := m.Snapshot
+	next.Checks = append([]model.Check(nil), m.Snapshot.Checks...)
+	for i := range next.Checks {
+		if next.Checks[i].Name == "integration tests" {
+			next.Checks[i].State = model.CheckPassed
+		}
+	}
+	next.CheckCounts.Pending, next.CheckCounts.Passed = 0, 3
+	apply(m, SummaryResult{Generation: m.Generation, Data: next})
+	apply(m, key("enter"))
+	if m.Pinned != nil || !m.Expanded[foldKey] {
+		t.Fatalf("enter after the refresh must toggle the fold row, not pin: cursor %d pinned %+v", m.Cursor, m.Pinned)
+	}
+}
+
+func TestClickOnTheFoldRowTogglesIt(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width, m.Height = 100, 60
+	y := -1
+	for i, l := range strings.Split(plainView(m), "\n") {
+		if strings.Contains(l, "▸") {
+			y = i
+		}
+	}
+	if apply(m, click(3, y)); y < 0 || !m.Expanded[foldKey] {
+		t.Fatalf("clicking the fold row (row %d) must expand it", y)
+	}
+}

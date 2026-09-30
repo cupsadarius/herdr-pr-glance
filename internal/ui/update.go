@@ -132,6 +132,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		old := m.Snapshot.PR
+		// The cursor is an index and the body's shape follows check states,
+		// so remember what is selected and find it again after the swap.
+		var keep string
+		if it, ok := m.selected(); ok {
+			keep = anchor(it)
+		}
 		m.Snapshot = x.Data
 		m.Snapshot.FetchedAt = m.now()
 		// A pinned entry that is no longer in the stack cannot be navigated
@@ -143,6 +149,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.NextSummary = m.now().Add(time.Minute)
 		if (old == nil) != (x.Data.PR == nil) || (old != nil && x.Data.PR != nil && *old != *x.Data.PR) {
 			m.switchPR()
+		} else {
+			m.reanchor(keep)
 		}
 		m.clamp()
 	case CacheResult:

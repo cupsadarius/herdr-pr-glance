@@ -45,8 +45,9 @@ type Model struct {
 	SummaryError, SourceError  error
 	NextSummary, CooldownUntil time.Time
 	// Width and Height come from tea.WindowSizeMsg; Cursor selects a body item
-	// and Offset scrolls the body. Expanded is keyed by review-thread ID so an
-	// expansion survives a refresh that replaces the thread value.
+	// and Offset scrolls the body. Expanded is keyed by review-thread ID, or by
+	// foldKey for the CI fold row, so an expansion survives a refresh that
+	// replaces the thread value.
 	Width, Height  int
 	Cursor, Offset int
 	Expanded       map[string]bool

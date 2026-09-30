@@ -65,7 +65,8 @@ func ciBar(c model.CheckCounts, w int) string {
 	return b.String()
 }
 
-// ciSummary is the heading's verdict: the worst thing first.
+// ciSummary is the heading's verdict by precedence: failing and running,
+// failing, running, passed, then the tally.
 func (m *Model) ciSummary() []span {
 	c := m.Snapshot.CheckCounts
 	running := span{text: m.pendingGlyph() + " " + strconv.Itoa(c.Pending) + " running", style: pal.yellow}
