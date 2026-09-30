@@ -95,7 +95,7 @@ CI → Review → Stack. (Today Stack is first.) Headings are bold `CI`, `Review
 - Heading, by precedence:
   - failing and running: `◷ N running · ✗ N failing` (yellow, red);
   - failing only: `✗ N failing` (red);
-  - running only: `◷ N running` (yellow; `◷` is the spinner frame);
+  - running only: `◷ N running` (yellow; `◷` stands for the current MiniDot spinner frame, e.g. `⠋`);
   - otherwise, if any passed: `✓ N passed` (green);
   - otherwise, checks exist but all are neutral/skipped/unknown: the faint
     tally from `countsSpans` (e.g. `22 skipped`);
