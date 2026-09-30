@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
@@ -90,7 +91,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ActionError = x.Err
 		m.clamp()
 	case TickMsg:
-		return m, tea.Batch(m.resolve(), tea.Tick(2*time.Second, func(time.Time) tea.Msg { return TickMsg{} }))
+		cmds := []tea.Cmd{m.resolve(), tea.Tick(2*time.Second, func(time.Time) tea.Msg { return TickMsg{} })}
+		if m.busy() && !m.spinning {
+			m.spinning = true
+			cmds = append(cmds, m.spin.Tick)
+		}
+		return m, tea.Batch(cmds...)
+	case spinner.TickMsg:
+		if !m.busy() {
+			m.spinning = false
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(x)
+		return m, cmd
 	case SourceResult:
 		m.resolving = false
 		if x.Generation != m.Generation {
@@ -218,4 +232,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.discussion(m.Section, false)
 	}
 	return m, nil
+}
+
+// busy reports whether anything on screen is still in progress: a running
+// check, or a discussion section being fetched.
+func (m *Model) busy() bool {
+	if m.Snapshot.CheckCounts.Pending > 0 {
+		return true
+	}
+	for _, d := range m.Discussions {
+		if d != nil && d.Loading {
+			return true
+		}
+	}
+	return false
 }

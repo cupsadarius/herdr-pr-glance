@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
 
@@ -61,7 +63,11 @@ type Model struct {
 	// md memoizes Markdown rendering; it is a cache, not observable state.
 	md *markdown
 	// help renders the full key list; it holds only styles.
-	help      help.Model
+	help help.Model
+	// spin animates running checks and loading sections. spinning is true
+	// while a spinner tick is in flight, so only one chain ever runs.
+	spin      spinner.Model
+	spinning  bool
 	resolver  SourceResolver
 	github    GitHub
 	cache     Cache
@@ -84,6 +90,8 @@ func New(r SourceResolver, g GitHub, c Cache, now func() time.Time) *Model {
 	m := &Model{md: newMarkdown(), resolver: r, github: g, cache: c, now: now, ctx: ctx, cancel: cancel, Section: model.Overview, Discussions: map[model.Section]*DiscussionState{}, Expanded: map[string]bool{}}
 	m.help = help.New()
 	m.help.Styles = helpStyles()
+	// The spinner renders its bare frame; the span around it picks the colour.
+	m.spin = spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(lipgloss.NewStyle()))
 	return m
 }
 func (m *Model) Init() tea.Cmd { return func() tea.Msg { return TickMsg{} } }

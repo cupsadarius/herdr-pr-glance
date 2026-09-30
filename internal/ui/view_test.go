@@ -474,8 +474,8 @@ func TestOverviewRendersIdentityStatisticsAndChecks(t *testing.T) {
 		"12s ago", "acme/service", "#3630", "OPEN",
 		"Re-request denied approvals", "@author", "143 commits", "8 files",
 		"+284", "-76", "Review  changes requested", "Overview", "Comments", "Reviews",
-		"CI  ◷ 1 running · ✗ 4 failing", "✓ 2 passed",
-		"× unit tests", "× deploy preview", "× e2e", "× migrate", "◷ integration tests",
+		"CI  ⠋ 1 running · ✗ 4 failing", "✓ 2 passed",
+		"× unit tests", "× deploy preview", "× e2e", "× migrate", "⠋ integration tests",
 		"r refresh  o browser  z zoom  ? help  q close",
 	} {
 		if !strings.Contains(out, want) {

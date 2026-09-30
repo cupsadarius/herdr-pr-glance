@@ -37,7 +37,7 @@ func TestCIBlockListsProblemsAndFoldsTheRest(t *testing.T) {
 	overviewFixture(m, *now)
 	m.Width, m.Height = 100, 60
 	rows := strings.Join(bodyRows(m.View().Content), "\n")
-	for _, want := range []string{"CI  ◷ 1 running · ✗ 4 failing", "× unit tests", "× migrate", "◷ integration tests",
+	for _, want := range []string{"CI  ⠋ 1 running · ✗ 4 failing", "× unit tests", "× migrate", "⠋ integration tests",
 		"▸ ✓ 2 passed · 1 neutral · 1 skipped · 1 unknown"} {
 		if !strings.Contains(rows, want) {
 			t.Fatalf("missing %q in:\n%s", want, rows)
@@ -95,7 +95,7 @@ func TestCIHeadingCases(t *testing.T) {
 		{"failing only", []model.Check{{Name: "a", State: model.CheckFailed}, {Name: "b", State: model.CheckPassed}},
 			model.CheckCounts{Failed: 1, Passed: 1}, "CI  ✗ 1 failing", false},
 		{"running only", []model.Check{{Name: "a", State: model.CheckPending}},
-			model.CheckCounts{Pending: 1}, "CI  ◷ 1 running", true},
+			model.CheckCounts{Pending: 1}, "CI  ⠋ 1 running", true},
 		{"all passed", []model.Check{{Name: "a", State: model.CheckPassed}, {Name: "b", State: model.CheckSkipped}},
 			model.CheckCounts{Passed: 1, Skipped: 1}, "CI  ✓ 1 passed", false},
 		{"only skipped", []model.Check{{Name: "a", State: model.CheckSkipped}},
@@ -207,5 +207,16 @@ func TestCompactCounts(t *testing.T) {
 		if got := compact(n); got != want {
 			t.Errorf("compact(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestRunningRowsUseTheSpinnerFrame(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 100
+	frame := m.spin.View()
+	plain := plainView(m)
+	if !strings.Contains(plain, frame+" integration tests") || !strings.Contains(plain, frame+" 1 running") {
+		t.Fatalf("running rows and heading must show spinner frame %q:\n%s", frame, plain)
 	}
 }

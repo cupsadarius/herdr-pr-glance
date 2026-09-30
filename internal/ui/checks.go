@@ -87,8 +87,8 @@ func (m *Model) ciSummary() []span {
 	}
 }
 
-// pendingGlyph is the running-check glyph; Task 7 turns it into the spinner.
-func (m *Model) pendingGlyph() string { return "◷" }
+// pendingGlyph is the spinner's current frame.
+func (m *Model) pendingGlyph() string { return m.spin.View() }
 
 // ciBlock renders the CI heading, the bar and the check rows. Failing and
 // running checks are listed; the rest fold into one selectable summary row
@@ -133,8 +133,13 @@ func (m *Model) ciBlock(w, paneW int) ([]string, []bodyItem) {
 	return head, items
 }
 
-// checkLine is a check row; Task 7 swaps the running glyph for the spinner.
-func (m *Model) checkLine(c model.Check, w int) string { return checkRow(c, w) }
+// checkLine is a check row whose running glyph is the spinner frame.
+func (m *Model) checkLine(c model.Check, w int) string {
+	if c.State == model.CheckPending {
+		return checkRowGlyph(c, w, m.spin.View())
+	}
+	return checkRow(c, w)
+}
 
 // foldRow summarises the folded checks. A green tick appears only when
 // something actually passed.

@@ -181,11 +181,15 @@ compare the cursor with the entry's index in the whole body, not with
   nothing.
 - Failing, running and expanded check rows keep today's behaviour: selectable,
   `o` or a click opens the check URL.
-- Spinner ticks: the first tick is scheduled when a snapshot arrives with
-  pending checks or a discussion section starts loading. Each tick reschedules
-  only while that is still true, so the spinner adds no ticks to an idle pane
-  (the existing 2s `TickMsg` is unchanged). A duplicate concurrent tick is
-  dropped by the spinner's own tag check.
+- Spinner ticks: the existing 2s `TickMsg` handler starts the spinner when the
+  pane is busy (a check is pending or a discussion section is loading) and no
+  spinner tick is already in flight (`spinning`). Result handlers do not
+  schedule spinner ticks, so their commands stay unchanged. The spinner
+  therefore starts within 2s of work appearing; its first frame shows
+  immediately. Each spinner tick reschedules only while the pane is still
+  busy; once nothing is pending it returns no command and clears `spinning`,
+  so an idle pane gets no extra ticks. A duplicate concurrent tick is dropped
+  by the spinner's own tag check.
 - Full help (`?`): replaces the body only; header and footer stay. `?` or
   `esc` closes it; `q` and `ctrl+c` still quit; all other keys are ignored
   while it is open. `esc` quits only when help is closed. While help is open,

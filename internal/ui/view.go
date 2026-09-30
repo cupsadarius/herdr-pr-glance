@@ -556,8 +556,9 @@ func checkGlyph(s model.CheckState) string {
 	}
 }
 
-func checkRow(c model.Check, w int) string {
-	glyph := checkGlyph(c.State)
+func checkRow(c model.Check, w int) string { return checkRowGlyph(c, w, checkGlyph(c.State)) }
+
+func checkRowGlyph(c model.Check, w int, glyph string) string {
 	left := glyph + " " + strings.ReplaceAll(clean(c.Name), "\n", " ")
 	right := strings.ReplaceAll(string(c.State), "_", " ")
 	// Keep a readable name even in the narrowest supported pane.
@@ -579,7 +580,7 @@ func (m *Model) sectionLead(s model.Section) []string {
 	var out []string
 	d := m.Discussions[s]
 	if d == nil || d.Loading {
-		out = append(out, styled(pal.faint, "Loading…"))
+		out = append(out, styled(pal.faint, m.spin.View()+" Loading…"))
 	}
 	if d != nil && d.Data != nil {
 		age := styled(pal.faint, "fetched "+ago(m.now().Sub(d.Data.FetchedAt))+" ago")
