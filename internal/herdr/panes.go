@@ -158,6 +158,11 @@ func (l *Launcher) Open(ctx context.Context) error {
 // after a session restart. Only a known missing/wrong owner permits a new pane.
 func (l *Launcher) focusRecorded(ctx context.Context, pane string) (bool, error) {
 	out, runErr := l.run(ctx, "plugin", "pane", "focus", pane)
+	// A failed focus exits nonzero with the error envelope on stderr, not stdout.
+	var cmdErr *command.Error
+	if out == "" && errors.As(runErr, &cmdErr) {
+		out = cmdErr.Stderr
+	}
 	var envelope paneOpenEnvelope
 	decodeErr := json.Unmarshal([]byte(out), &envelope)
 	if decodeErr == nil && envelope.Error != nil {

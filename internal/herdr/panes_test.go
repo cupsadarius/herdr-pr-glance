@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cupsadarius/herdr-pr-glance/internal/command"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
 
@@ -499,6 +500,12 @@ func TestRecordedPaneOwnership(t *testing.T) {
 	}{
 		{"ordinary pane", `{"error":{"code":"plugin_pane_not_found","message":"plugin pane not found"}}`, errors.New("exit 1"), true},
 		{"structured missing", `{"error":{"code":"plugin_pane_not_found","message":"plugin pane not found"}}`, nil, true},
+		// Herdr prints the error envelope on stderr and exits 1, so the runner
+		// returns empty stdout and the envelope inside *command.Error.
+		{"missing on stderr", "", &command.Error{Program: "herdr", ExitCode: 1, Err: errors.New("exit status 1"),
+			Stderr: `{"error":{"code":"plugin_pane_not_found","message":"plugin pane not found"},"id":"cli:plugin"}`}, true},
+		{"other error on stderr", "", &command.Error{Program: "herdr", ExitCode: 1, Err: errors.New("exit status 1"),
+			Stderr: `{"error":{"code":"permission_denied","message":"denied"}}`}, false},
 		{"other plugin", `{"result":{"type":"plugin_pane_focused","plugin_pane":{"plugin_id":"other.plugin","entrypoint":"view","pane":{"pane_id":"w1:p2"}}}}`, nil, true},
 		{"other entrypoint", `{"result":{"plugin_pane":{"plugin_id":"glance.pr","entrypoint":"other","pane":{"pane_id":"w1:p2"}}}}`, nil, true},
 		{"unexpected error", `{"error":{"code":"permission_denied","message":"plugin_pane_not_found is not the error code"}}`, nil, false},
