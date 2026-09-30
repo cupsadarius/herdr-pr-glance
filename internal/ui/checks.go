@@ -162,3 +162,16 @@ func (m *Model) foldRow(w int) string {
 	add(c.Unknown, strconv.Itoa(c.Unknown)+" unknown", pal.faint)
 	return truncateSpans(spans, w)
 }
+
+// compact shortens a large diff count: whole thousands from 10,000 and whole
+// millions from 1,000,000, always rounded down.
+func compact(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return strconv.Itoa(n/1_000_000) + "M"
+	case n >= 10_000:
+		return strconv.Itoa(n/1_000) + "k"
+	default:
+		return strconv.Itoa(n)
+	}
+}

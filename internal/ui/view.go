@@ -186,44 +186,21 @@ type headerLine struct {
 // terminal is too short to show the whole header plus one body row.
 const (
 	prioError = iota + 1
-	prioState
 	prioTitle
-	prioRepo
-	prioAuthor
-	prioReview
 	prioCounts
-	prioDiff
 	prioBlank
 )
 
 func (m *Model) headerLines(w int) []headerLine {
 	s := m.Snapshot
-	out := m.titleLines(w)
+	out := m.identityLines(w)
 	add := func(prio int, text string) { out = append(out, headerLine{text: text, prio: prio}) }
-	addWrapped := func(prio int, style lipgloss.Style, text string) {
-		for _, l := range styleWrapped(style, text, w) {
-			add(prio, l)
-		}
+	for _, l := range styleWrapped(pal.bold, clean(s.Title), w) {
+		add(prioTitle, l)
 	}
-	repo := ""
-	if s.PR != nil {
-		repo = clean(s.PR.Repository)
+	for _, l := range wrapSpans(m.metaSpans(), w) {
+		add(prioCounts, l)
 	}
-	add(prioRepo, styled(pal.faint, repo)+" · "+styled(pal.cyan, clean(m.Source.Branch)))
-	add(prioBlank, "")
-	if s.PR != nil {
-		state := prState(s)
-		add(prioState, styled(pal.bold, fmt.Sprintf("#%d", s.PR.Number))+"  "+styled(prStateStyle(state), state))
-	}
-	addWrapped(prioTitle, pal.bold, clean(s.Title))
-	add(prioAuthor, styled(pal.cyan, "@"+clean(s.Author))+"  "+
-		styled(pal.faint, headRef(s))+" → "+styled(pal.faint, clean(s.BaseBranch)))
-	add(prioBlank, "")
-	add(prioCounts, plural(s.Commits, "commit")+" · "+plural(s.ChangedFiles, "file"))
-	add(prioDiff, styled(pal.green, fmt.Sprintf("+%d", s.Additions))+"  "+
-		styled(pal.red, fmt.Sprintf("-%d", s.Deletions)))
-	add(prioReview, styled(pal.faint, "Review: ")+
-		styled(decisionStyle(s.ReviewDecision), reviewDecision(s.ReviewDecision)))
 	add(prioBlank, "")
 	text, spans := tabLine(m.Section)
 	out = append(out, headerLine{text: text, tabs: spans})
@@ -232,6 +209,53 @@ func (m *Model) headerLines(w int) []headerLine {
 	}
 	add(prioBlank, "")
 	return out
+}
+
+// identityLines is line 1: badge, number and repository on the left, the
+// status on the right. The repository gives way first; a status that still
+// does not fit wraps onto its own lines below, as the empty-state title does.
+// Without a pull request it is the empty-state title itself.
+func (m *Model) identityLines(w int) []headerLine {
+	s := m.Snapshot
+	if s.PR == nil {
+		return m.titleLines(w)
+	}
+	left := badge(prState(s)) + " " + styled(pal.bold, fmt.Sprintf("#%d", s.PR.Number))
+	leftW := ansi.StringWidth(left)
+	status := m.statusSpans()
+	statusW := ansi.StringWidth(spanText(status))
+	if statusW > 0 && leftW+1+statusW > w {
+		out := []headerLine{{text: ansi.Truncate(left, w, "…")}}
+		for _, l := range wrapSpans(status, w) {
+			out = append(out, headerLine{text: l, prio: prioError})
+		}
+		return out
+	}
+	room := w - leftW - 2
+	if statusW > 0 {
+		room -= statusW + 1
+	}
+	if repo := clean(s.PR.Repository); room >= 1 && repo != "" {
+		shown := ansi.Truncate(repo, room, "…")
+		left += "  " + styled(pal.faint, shown)
+		leftW += 2 + ansi.StringWidth(shown)
+	}
+	if statusW == 0 {
+		return []headerLine{{text: left}}
+	}
+	return []headerLine{{text: left + strings.Repeat(" ", w-leftW-statusW) + renderSpans(status)}}
+}
+
+// metaSpans is the author and the size of the change.
+func (m *Model) metaSpans() []span {
+	s := m.Snapshot
+	return []span{
+		{text: "@" + clean(s.Author), style: pal.cyan},
+		{text: " · " + plural(s.Commits, "commit") + " · " + plural(s.ChangedFiles, "file") + " · ", style: pal.faint},
+		{text: "+" + compact(s.Additions), style: pal.green},
+		{text: " ", style: pal.none},
+		{text: "-" + compact(s.Deletions), style: pal.red},
+	}
 }
 
 func fitHeader(lines []headerLine, budget int) []headerLine {
@@ -266,7 +290,7 @@ func tabLine(active model.Section) (string, []rowTarget) {
 		}
 		label, style := t.label, pal.faint
 		if t.section == active {
-			label, style = "["+label+"]", pal.activeTab
+			style = pal.activeTab
 		}
 		b.WriteString(styled(style, label))
 		spans = append(spans, rowTarget{x0: x, x1: x + ansi.StringWidth(label), tab: t.section, item: -1})
@@ -288,7 +312,7 @@ func (m *Model) statusSpans() []span {
 	}
 	switch {
 	case !m.Snapshot.FetchedAt.IsZero():
-		add(pal.faint, "refreshed "+ago(now.Sub(m.Snapshot.FetchedAt))+" ago")
+		add(pal.faint, ago(now.Sub(m.Snapshot.FetchedAt))+" ago")
 		if m.SummaryStale() {
 			add(pal.yellow, "stale")
 		}
@@ -390,22 +414,6 @@ func prState(s model.Snapshot) string {
 		return "UNKNOWN"
 	}
 	return strings.ToUpper(clean(s.State))
-}
-
-func headRef(s model.Snapshot) string {
-	head := clean(s.HeadBranch)
-	if repo := clean(s.HeadRepository); repo != "" && s.PR != nil && repo != s.PR.Repository {
-		return repo + ":" + head
-	}
-	return head
-}
-
-func reviewDecision(s string) string {
-	r := []rune(strings.ToLower(strings.ReplaceAll(clean(s), "_", " ")))
-	if len(r) == 0 {
-		return "unavailable"
-	}
-	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 // body returns the lead lines, the selectable items and the trailing lines of

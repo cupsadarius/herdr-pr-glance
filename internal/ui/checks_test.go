@@ -201,3 +201,11 @@ func TestClickOnTheFoldRowTogglesIt(t *testing.T) {
 		t.Fatalf("clicking the fold row (row %d) must expand it", y)
 	}
 }
+
+func TestCompactCounts(t *testing.T) {
+	for n, want := range map[int]string{0: "0", 9999: "9999", 10000: "10k", 25365: "25k", 999999: "999k", 1000000: "1M", 2500000: "2M"} {
+		if got := compact(n); got != want {
+			t.Errorf("compact(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

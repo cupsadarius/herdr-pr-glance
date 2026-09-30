@@ -10,8 +10,8 @@ import (
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
 
-// palette names only the sixteen ANSI colours and the attributes every
-// terminal implements, so the view follows the user's own theme instead of
+// palette names only the sixteen ANSI colours (foreground, and background for
+// the state badge) and the attributes every terminal implements, so the view follows the user's own theme instead of
 // imposing one. Bubble Tea downsamples them to the terminal's profile.
 type palette struct {
 	none, bold, faint                 lipgloss.Style
@@ -31,8 +31,19 @@ func newPalette() palette {
 	return palette{
 		none: base, bold: bold, faint: faint,
 		red: red, green: green, yellow: yellow, magenta: magenta, cyan: cyan,
-		faintGreen: green.Faint(true), boldCyan: cyan.Bold(true), activeTab: bold.Reverse(true),
+		faintGreen: green.Faint(true), boldCyan: cyan.Bold(true), activeTab: bold.Underline(true),
 	}
+}
+
+// badge renders the PR state as a padded label. Open, merged and closed sit on
+// their ANSI background; draft and unknown stay faint text.
+func badge(state string) string {
+	base := lipgloss.NewStyle().Padding(0, 1)
+	bg := map[string]string{"OPEN": "2", "MERGED": "5", "CLOSED": "1"}
+	if c, ok := bg[state]; ok {
+		return base.Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color(c)).Render(state)
+	}
+	return base.Faint(true).Render(state)
 }
 
 // stateStyle colours a check by its outcome: red for anything that needs

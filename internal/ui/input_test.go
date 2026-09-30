@@ -71,7 +71,7 @@ func TestRefreshKeyEmitsRefreshMsg(t *testing.T) {
 func TestCursorMovementAndPaging(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
-	m.Height = 24
+	m.Height = 14
 	m.View()
 	apply(m, key("j"))
 	apply(m, key("down"))
@@ -177,7 +177,7 @@ func TestClickOnTabSelectsSection(t *testing.T) {
 	lines := strings.Split(content, "\n")
 	y, x := -1, -1
 	for i, l := range lines {
-		if j := strings.Index(l, "Comments"); j >= 0 && strings.Contains(l, "[Overview]") {
+		if j := strings.Index(l, "Comments"); j >= 0 && strings.Contains(l, "Overview") {
 			y, x = i, j+2
 		}
 	}
@@ -200,7 +200,7 @@ func TestClickOnTabSelectsSection(t *testing.T) {
 func TestWheelScrollsBody(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
-	m.Height = 24
+	m.Height = 14
 	m.View()
 	apply(m, wheel(8, false))
 	if m.Offset == 0 {
