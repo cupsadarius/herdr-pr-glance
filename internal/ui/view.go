@@ -137,15 +137,23 @@ func (m *Model) layoutView() (string, []rowTarget) {
 			out = append(out, l.text)
 		}
 		out = append(out, "")
-		out = append(out, m.errorLines(w)...)
-		out = append(out, styleWrapped(pal.faint, msg, w)...)
+		if m.ShowHelp {
+			for _, l := range m.helpLines() {
+				out = append(out, ansi.Truncate(l, w, "…"))
+			}
+		} else {
+			out = append(out, m.errorLines(w)...)
+			out = append(out, styleWrapped(pal.faint, msg, w)...)
+		}
 		return strings.Join(append(pad(out, w, h), foot), "\n"), rows
 	}
-	head := fitHeader(m.headerLines(w), h-2)
-	lines, spans := renderBody(m.body(m.contentWidth()))
-	markCursor(lines, spans, m.Cursor)
-	bodyHigh := h - len(head) - 1
-	off := clampOffset(m.Offset, len(lines), bodyHigh)
+	var help []string
+	budget := h - 2
+	if m.ShowHelp {
+		help = m.helpLines()
+		budget = max(2, h-1-len(help))
+	}
+	head := fitHeader(m.headerLines(w), budget)
 	out := make([]string, 0, h)
 	for i, l := range head {
 		for _, t := range l.tabs {
@@ -155,11 +163,15 @@ func (m *Model) layoutView() (string, []rowTarget) {
 		out = append(out, ansi.Truncate(l.text, w, "…"))
 	}
 	if m.ShowHelp {
-		for _, l := range m.helpLines() {
+		for _, l := range help {
 			out = append(out, ansi.Truncate(l, w, "…"))
 		}
 		return strings.Join(append(pad(out, w, h), foot), "\n"), rows
 	}
+	lines, spans := renderBody(m.body(m.contentWidth()))
+	markCursor(lines, spans, m.Cursor)
+	bodyHigh := h - len(head) - 1
+	off := clampOffset(m.Offset, len(lines), bodyHigh)
 	for i := off; i < len(lines) && i-off < bodyHigh; i++ {
 		rows = append(rows, rowTarget{y: len(out), x1: -1, item: itemAt(spans, i)})
 		out = append(out, ansi.Truncate(lines[i], w, "…"))

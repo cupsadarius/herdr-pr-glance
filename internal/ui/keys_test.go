@@ -62,12 +62,14 @@ func TestHelpTogglesAndSwallowsKeys(t *testing.T) {
 			t.Fatalf("help misses %q:\n%s", want, plain)
 		}
 	}
-	for _, k := range []string{"j", "r", "1", "enter", "]"} {
-		if cmd := apply(m, key(k)); cmd != nil || !m.ShowHelp || m.Cursor != 2 {
+	for _, k := range []string{"j", "r", "1", "enter", "]", "pgdown"} {
+		if cmd := apply(m, key(k)); cmd != nil || !m.ShowHelp || m.Cursor != 2 || m.Offset != 0 {
 			t.Fatalf("%q must be ignored while help is open", k)
 		}
 	}
-	apply(m, key("esc"))
+	if cmd := apply(m, key("esc")); cmd != nil {
+		t.Fatal("esc must not return a command")
+	}
 	if m.ShowHelp || m.Cursor != 2 {
 		t.Fatal("esc must close help and keep the cursor")
 	}
@@ -81,6 +83,11 @@ func TestHelpTogglesAndSwallowsKeys(t *testing.T) {
 		t.Fatal("q must still quit while help is open")
 	} else if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("q must return tea.Quit")
+	}
+	if cmd := apply(m, key("ctrl+c")); cmd == nil {
+		t.Fatal("ctrl+c must still quit while help is open")
+	} else if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("ctrl+c must return tea.Quit")
 	}
 }
 
@@ -114,6 +121,9 @@ func TestHelpMouse(t *testing.T) {
 			y, x = i, j+2
 		}
 	}
+	if y < 0 {
+		t.Fatal("tab row not found")
+	}
 	cmd := apply(m, click(x, y))
 	if m.ShowHelp || cmd == nil {
 		t.Fatal("a tab click must close help and select the tab")
@@ -121,4 +131,42 @@ func TestHelpMouse(t *testing.T) {
 	if msg, ok := cmd().(SelectSectionMsg); !ok || model.Section(msg) != model.Comments {
 		t.Fatalf("tab click produced %#v", msg)
 	}
+}
+
+func TestHelpShowsInEmptyStates(t *testing.T) {
+	m, _ := viewHarness()
+	apply(m, key("?"))
+	plain := plainView(m)
+	for _, want := range []string{"refresh", "page down"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("help misses %q in the empty state:\n%s", want, plain)
+		}
+	}
+	apply(m, key("esc"))
+	if plain := plainView(m); !strings.Contains(plain, "Loading…") {
+		t.Fatalf("closing help must show the empty message again:\n%s", plain)
+	}
+}
+
+func TestHelpKeepsTabsAndFitsHeight(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Width, m.Height = 44, 24
+	m.ShowHelp = true
+	plain := plainView(m)
+	for _, want := range []string{"stack: own PR", "zoom"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("help misses %q:\n%s", want, plain)
+		}
+	}
+	tabRow := false
+	for _, l := range strings.Split(plain, "\n") {
+		if strings.Contains(l, "Overview") && strings.Contains(l, "Reviews") {
+			tabRow = true
+		}
+	}
+	if !tabRow {
+		t.Fatalf("tab line missing:\n%s", plain)
+	}
+	assertBounds(t, m.View().Content, 44, 24)
 }

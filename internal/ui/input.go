@@ -26,7 +26,7 @@ func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		switch {
 		case bkey.Matches(k, keys.Help), k.String() == "esc":
 			m.ShowHelp = false
-		case k.String() == "q", k.String() == "ctrl+c":
+		case bkey.Matches(k, keys.Quit):
 			m.cancel()
 			return tea.Quit
 		}
