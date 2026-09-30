@@ -275,7 +275,7 @@ func assertBounds(t *testing.T, content string, w, h int) {
 // survivors are strings the narrowest supported pane must still show, so the
 // width bound cannot be satisfied by silently truncating the content away.
 var survivors = map[string][]string{
-	"overview":     {"Re-request", "Overview", "unit tests"},
+	"overview":     {"Re-request", "Overview", "unit tests", "CI  "},
 	"stack":        {"Re-request", "Stack  #", "#3705"},
 	"no-checks":    {"Re-request", "Overview", "No checks"},
 	"comments":     {"Re-request", "Comments", "@octocat"},
@@ -783,7 +783,6 @@ func styledLine(t *testing.T, content, want string) string {
 }
 
 func TestColorLeavesTheLayoutUnchanged(t *testing.T) {
-	t.Skip("layout goldens are regenerated in the last task of the pane redesign")
 	for _, tc := range []struct{ name, want string }{
 		{"overview", goldenOverview44}, {"reviews", goldenReviews44},
 	} {
@@ -793,6 +792,19 @@ func TestColorLeavesTheLayoutUnchanged(t *testing.T) {
 		if got := plainView(m); got != tc.want {
 			t.Errorf("%s: styling changed the layout\n--- got ---\n%s\n--- want ---\n%s", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestBarHiddenInNarrowPanes(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 23
+	if strings.Contains(plainView(m), "━") {
+		t.Fatal("no bar below 24 columns")
+	}
+	m.Width = 24
+	if !strings.Contains(plainView(m), "━") {
+		t.Fatal("bar from 24 columns")
 	}
 }
 
@@ -958,33 +970,33 @@ func TestOnlyThePaletteReachesTheTerminal(t *testing.T) {
 	}
 }
 
-// Golden renderings captured from main at 3835746, before any styling.
-const goldenOverview44 = `GLANCE PR                  refreshed 12s ago
-acme/service · feature/retry
-
-#3630  OPEN
+// Golden renderings of the redesigned pane, 44 columns wide.
+const goldenOverview44 = ` OPEN  #3630  acme/service           12s ago
 Re-request denied approvals when the
 reviewer list changes
-@author  feature/retry → main
+@author · 143 commits · 8 files · +284 -76
 
-143 commits · 8 files
-+284  -76
-Review: Changes requested
+Overview  Comments  Reviews
 
-[Overview]  Comments  Reviews
-
- CHECKS  4 failed · 1 pending · 2 passed · 1
- neutral · 1 skipped · 1 unknown
+ CI  ⠋ 1 running · ✗ 4 failing
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────
 ›× unit tests                         failed
  × deploy preview                  timed out
  × e2e                             cancelled
  × migrate                   action required
- ◷ integration tests                 pending
- ✓ lint                               passed
- ✓ build                              passed
- · docs                              neutral
- · vendor                            skipped
- ? mystery                           unknown
+ ⠋ integration tests                 pending
+ ▸ ✓ 2 passed · 1 neutral · 1 skipped · 1 u…
+ 
+ Review  changes requested
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1000,19 +1012,12 @@ Review: Changes requested
 
 r refresh o browser z zoom ? help q close`
 
-const goldenReviews44 = `GLANCE PR                  refreshed 12s ago
-acme/service · feature/retry
-
-#3630  OPEN
+const goldenReviews44 = ` OPEN  #3630  acme/service           12s ago
 Re-request denied approvals when the
 reviewer list changes
-@author  feature/retry → main
+@author · 143 commits · 8 files · +284 -76
 
-143 commits · 8 files
-+284  -76
-Review: Changes requested
-
-Overview  Comments  [Reviews]
+Overview  Comments  Reviews
 
  fetched 30s ago
 ›@reviewer  APPROVED
@@ -1020,6 +1025,13 @@ Overview  Comments  [Reviews]
  
  ▸ internal/ui/view.go  ✓~ 1c
  
+
+
+
+
+
+
+
 
 
 
