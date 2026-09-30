@@ -713,28 +713,48 @@ func TestDraftDoesNotHideLifecycle(t *testing.T) {
 }
 
 func TestViewDoesNotMutateModel(t *testing.T) {
-	m, now := viewHarness()
-	reviewsFixture(m, *now)
-	m.Expanded["t1"] = true // render reply bodies too, the most work a view does
-	// Capture field values before rendering, including navigation maps. md is
-	// exempt: it is the Markdown memoization cache, which View is allowed to
-	// fill because View is the only place that knows the width. It holds no
-	// state the rest of the program can observe.
-	before := reflect.ValueOf(*m)
-	values := make([]string, before.NumField())
-	for i := range values {
-		values[i] = fmt.Sprintf("%#v", before.Field(i))
-	}
-	m.View()
-	m.View()
-	after := reflect.ValueOf(*m)
-	for i, value := range values {
-		if name := after.Type().Field(i).Name; name == "md" {
-			continue
-		}
-		if got := fmt.Sprintf("%#v", after.Field(i)); got != value {
-			t.Errorf("View changed %s", after.Type().Field(i).Name)
-		}
+	for _, tc := range []struct {
+		name  string
+		setup func(m *Model, now time.Time)
+	}{
+		{"reviews", func(m *Model, now time.Time) {
+			reviewsFixture(m, now)
+			m.Expanded["t1"] = true // render reply bodies too, the most work a view does
+		}},
+		{"overview", func(m *Model, now time.Time) {
+			overviewFixture(m, now)
+			m.Expanded[foldKey] = true
+		}},
+		{"overview help", func(m *Model, now time.Time) {
+			overviewFixture(m, now)
+			m.Expanded[foldKey] = true
+			m.ShowHelp = true
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, now := viewHarness()
+			tc.setup(m, *now)
+			// Capture field values before rendering, including navigation maps.
+			// md is exempt: it is the Markdown memoization cache, which View is
+			// allowed to fill because View is the only place that knows the
+			// width. It holds no state the rest of the program can observe.
+			before := reflect.ValueOf(*m)
+			values := make([]string, before.NumField())
+			for i := range values {
+				values[i] = fmt.Sprintf("%#v", before.Field(i))
+			}
+			m.View()
+			m.View()
+			after := reflect.ValueOf(*m)
+			for i, value := range values {
+				if name := after.Type().Field(i).Name; name == "md" {
+					continue
+				}
+				if got := fmt.Sprintf("%#v", after.Field(i)); got != value {
+					t.Errorf("View changed %s", after.Type().Field(i).Name)
+				}
+			}
+		})
 	}
 }
 
@@ -1114,5 +1134,15 @@ func TestMetaLineAndTabs(t *testing.T) {
 	m.Pinned = &model.PR{Number: 1}
 	if !strings.Contains(strings.Split(plainView(m), "\n")[0], "pinned") {
 		t.Fatal("a pinned PR must say so on line 1")
+	}
+}
+
+func TestSectionLoadingSpinnerIsYellow(t *testing.T) {
+	m, now := viewHarness()
+	commentsFixture(m, *now)
+	m.Discussions[model.Comments].Loading = true
+	line := styledLine(t, m.View().Content, "Loading…")
+	if !carries(line, sgrYellow) || !carries(line, sgrFaint) {
+		t.Errorf("the loading spinner must be yellow and its label faint: %q", line)
 	}
 }

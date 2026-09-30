@@ -65,8 +65,9 @@ type rowTarget struct {
 }
 
 // bodyItem is one selectable entity in the body: a check, the CI fold row, a
-// stack entry, a comment, a review or a review thread. Items own the lines they occupy so the row map, the
-// cursor and the scroll offset all agree on the layout.
+// stack entry, a comment, a review or a review thread. Items own the lines
+// they occupy so the row map, the cursor and the scroll offset all agree on
+// the layout.
 type bodyItem struct {
 	// head lines belong to no item: they introduce the group this item starts,
 	// so the cursor and the row map still address the item itself.
@@ -580,7 +581,7 @@ func (m *Model) sectionLead(s model.Section) []string {
 	var out []string
 	d := m.Discussions[s]
 	if d == nil || d.Loading {
-		out = append(out, styled(pal.faint, m.spin.View()+" Loading…"))
+		out = append(out, styled(pal.yellow, m.pendingGlyph())+styled(pal.faint, " Loading…"))
 	}
 	if d != nil && d.Data != nil {
 		age := styled(pal.faint, "fetched "+ago(m.now().Sub(d.Data.FetchedAt))+" ago")

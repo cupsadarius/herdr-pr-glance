@@ -3,6 +3,7 @@ package ui
 import (
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	bkey "charm.land/bubbles/v2/key"
@@ -236,17 +237,26 @@ func anchor(it bodyItem) string {
 }
 
 // reanchor moves the cursor to the item with the given anchor, if the body
-// still has one.
+// still has one. A check that is gone has usually passed and folded away, so
+// the selection falls back to the fold row: the bare index could otherwise
+// land on a stack row, and enter would pin a different pull request.
 func (m *Model) reanchor(want string) {
 	if want == "" {
 		return
 	}
 	_, items, _ := m.body(m.contentWidth())
+	fold := -1
 	for i, it := range items {
 		if anchor(it) == want {
 			m.Cursor = i
 			return
 		}
+		if it.fold {
+			fold = i
+		}
+	}
+	if fold >= 0 && want != "fold" && !strings.HasPrefix(want, "pr:") {
+		m.Cursor = fold
 	}
 }
 

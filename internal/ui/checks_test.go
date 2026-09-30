@@ -220,3 +220,29 @@ func TestRunningRowsUseTheSpinnerFrame(t *testing.T) {
 		t.Fatalf("running rows and heading must show spinner frame %q:\n%s", frame, plain)
 	}
 }
+
+func TestALostCheckSelectionFallsBackToTheFoldRow(t *testing.T) {
+	m, now := viewHarness()
+	stackFixture(m, *now)
+	m.Width, m.Height = 100, 60
+	m.Cursor = 3 // migrate, a failing check
+	if it, ok := m.selected(); !ok || it.url != "https://ci.example.com/migrate" {
+		t.Fatalf("cursor 3 must select migrate, got %+v", it)
+	}
+	next := m.Snapshot
+	next.Checks = append([]model.Check(nil), m.Snapshot.Checks...)
+	for i := range next.Checks {
+		if next.Checks[i].Name == "migrate" {
+			next.Checks[i].State = model.CheckPassed
+		}
+	}
+	next.CheckCounts.Failed, next.CheckCounts.Passed = 3, 3
+	apply(m, SummaryResult{Generation: m.Generation, Data: next})
+	if it, ok := m.selected(); !ok || !it.fold {
+		t.Fatalf("a check that folded away must leave the fold row selected, got cursor %d %+v", m.Cursor, it)
+	}
+	apply(m, key("enter"))
+	if m.Pinned != nil || !m.Expanded[foldKey] {
+		t.Fatalf("enter must toggle the fold row, not pin: pinned %+v", m.Pinned)
+	}
+}

@@ -136,7 +136,7 @@ func (m *Model) ciBlock(w, paneW int) ([]string, []bodyItem) {
 // checkLine is a check row whose running glyph is the spinner frame.
 func (m *Model) checkLine(c model.Check, w int) string {
 	if c.State == model.CheckPending {
-		return checkRowGlyph(c, w, m.spin.View())
+		return checkRowGlyph(c, w, m.pendingGlyph())
 	}
 	return checkRow(c, w)
 }

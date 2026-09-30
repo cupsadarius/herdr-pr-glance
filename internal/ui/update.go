@@ -235,8 +235,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // busy reports whether anything on screen is still in progress: a running
-// check, or a discussion section being fetched.
+// check, or a discussion section being fetched. A hidden tab is never busy:
+// summary polling stops there, so a stale pending check would spin forever.
 func (m *Model) busy() bool {
+	if !m.Source.Visible {
+		return false
+	}
 	if m.Snapshot.CheckCounts.Pending > 0 {
 		return true
 	}

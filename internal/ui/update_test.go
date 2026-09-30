@@ -633,3 +633,18 @@ func TestSpinnerTicksOnlyWhileBusy(t *testing.T) {
 		t.Fatal("an idle 2s tick must not start the spinner")
 	}
 }
+
+func TestSpinnerStaysIdleInAHiddenTab(t *testing.T) {
+	for _, visible := range []bool{false, true} {
+		m, now := viewHarness()
+		overviewFixture(m, *now) // has one pending check
+		m.Source.Visible = visible
+		if got := m.busy(); got != visible {
+			t.Fatalf("visible=%v: busy() = %v, want %v", visible, got, visible)
+		}
+		apply(m, TickMsg{})
+		if m.spinning != visible {
+			t.Fatalf("visible=%v: the 2s tick left spinning = %v", visible, m.spinning)
+		}
+	}
+}
