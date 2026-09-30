@@ -76,6 +76,8 @@ type bodyItem struct {
 	threadID string
 	// pin is the stack entry this row shows, if any; selecting it pins it.
 	pin *model.PR
+	// fold marks the CI summary row; activating it expands the folded checks.
+	fold bool
 }
 
 // View renders the current state without mutating the model.
@@ -421,48 +423,61 @@ func (m *Model) body(w int) ([]string, []bodyItem, []string) {
 	}
 }
 
+// overviewBody lays out CI, then the review decision, then the stack. Lines
+// that introduce a group ride on the next item as its head, so the cursor and
+// the row map skip them; whatever is left over trails the last item.
 func (m *Model) overviewBody(w int) ([]string, []bodyItem, []string) {
-	s := m.Snapshot
-	lead, items, gap := m.stackBody(w)
-	if len(s.Checks) == 0 {
-		return lead, items, append(gap, styled(pal.bold, "CHECKS"), styled(pal.faint, "No checks"))
+	paneW, _ := m.size()
+	var items []bodyItem
+	var pending []string
+	add := func(it bodyItem) {
+		it.head = append(pending, it.head...)
+		pending = nil
+		items = append(items, it)
 	}
-	heading := []span{{text: "CHECKS", style: pal.bold}, {text: "  ", style: pal.none}}
-	head := append(gap, wrapSpans(append(heading, countsSpans(s.CheckCounts)...), w)...)
-	for i, c := range s.Checks {
-		item := bodyItem{lines: []string{checkRow(c, w)}, url: c.URL}
-		if i == 0 {
-			item.head = head
+	head, ci := m.ciBlock(w, paneW)
+	pending = append(pending, head...)
+	for _, it := range ci {
+		add(it)
+	}
+	pending = append(pending, "", m.reviewLine(w))
+	if s := m.Snapshot.Stack; s != nil {
+		pending = append(pending, "", m.stackHeading(w))
+		for i := len(s.Entries) - 1; i >= 0; i-- {
+			e := s.Entries[i]
+			pin := e.PR
+			// The cursor gutter already points at the row it selects, so the
+			// entry marker stands down there. The index is the item's place in
+			// the whole body, which now starts with the CI rows.
+			add(bodyItem{lines: []string{m.stackRow(e, w, m.Cursor == len(items))}, url: e.PR.URL, pin: &pin})
 		}
-		items = append(items, item)
+		if hidden := s.Size - len(s.Entries); hidden > 0 {
+			pending = append(pending, styled(pal.faint, fmt.Sprintf("+%d more", hidden)))
+		}
 	}
-	return lead, items, nil
+	return nil, items, pending
 }
 
-// stackBody renders the stack this pull request belongs to: a heading, then one
-// row per entry with the top of the stack first, as GitHub shows it. The rows
-// are selectable so the cursor, a click and `o` all address a single entry.
-func (m *Model) stackBody(w int) ([]string, []bodyItem, []string) {
+// reviewLine states the review decision in words.
+func (m *Model) reviewLine(w int) string {
+	text := "no decision yet"
+	switch strings.ToUpper(strings.ReplaceAll(clean(m.Snapshot.ReviewDecision), " ", "_")) {
+	case "APPROVED":
+		text = "approved"
+	case "CHANGES_REQUESTED":
+		text = "changes requested"
+	case "REVIEW_REQUIRED":
+		text = "review required"
+	}
+	return truncateSpans([]span{{text: "Review", style: pal.bold}, {text: "  ", style: pal.none},
+		{text: text, style: decisionStyle(m.Snapshot.ReviewDecision)}}, w)
+}
+
+// stackHeading names the stack, the shown entry's position and the trunk.
+func (m *Model) stackHeading(w int) string {
 	s := m.Snapshot
-	if s.Stack == nil {
-		return nil, nil, nil
-	}
-	heading := []span{{text: "STACK", style: pal.bold},
-		{text: fmt.Sprintf(" #%d · %s/%d · base %s", s.Stack.Number, position(s.StackPosition), s.Stack.Size, clean(s.Stack.BaseBranch)), style: pal.faint}}
-	lead := []string{truncateSpans(heading, w)}
-	items := make([]bodyItem, 0, len(s.Stack.Entries))
-	for i := len(s.Stack.Entries) - 1; i >= 0; i-- {
-		e := s.Stack.Entries[i]
-		pin := e.PR
-		// The cursor gutter already points at the row it selects, so the entry
-		// marker stands down there rather than drawing a second arrow.
-		items = append(items, bodyItem{lines: []string{m.stackRow(e, w, m.Cursor == len(items))}, url: e.PR.URL, pin: &pin})
-	}
-	var gap []string
-	if hidden := s.Stack.Size - len(s.Stack.Entries); hidden > 0 {
-		gap = append(gap, styled(pal.faint, fmt.Sprintf("+%d more", hidden)))
-	}
-	return lead, items, append(gap, "")
+	return truncateSpans([]span{{text: "Stack", style: pal.bold}, {text: fmt.Sprintf("  #%d · %s/%d · onto %s",
+		s.Stack.Number, position(s.StackPosition), s.Stack.Size, clean(s.Stack.BaseBranch)), style: pal.faint}}, w)
 }
 
 // stackRow shows one entry: its number, a dot coloured by its lifecycle, its

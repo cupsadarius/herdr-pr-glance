@@ -85,7 +85,7 @@ func TestCursorMovementAndPaging(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		apply(m, key("j"))
 	}
-	if m.Cursor != len(m.Snapshot.Checks)-1 {
+	if m.Cursor != 5 { // 4 failing, 1 running, then the fold row
 		t.Fatalf("cursor must clamp to the last item, got %d", m.Cursor)
 	}
 	for i := 0; i < 50; i++ {
@@ -418,6 +418,7 @@ func TestClickAndOpenOnAStackRow(t *testing.T) {
 	}
 	var opened []string
 	m.Open = func(u string) error { opened = append(opened, u); return nil }
+	m.Cursor = 6 // the first stack row, #3709, follows the 6 CI items
 	finish(m, apply(m, key("o")))
 	if len(opened) != 1 || opened[0] != "https://github.com/acme/service/pull/3709" {
 		t.Fatalf("o on the first stack row must open its URL, got %v", opened)

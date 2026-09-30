@@ -134,6 +134,14 @@ func (m *Model) activate() tea.Cmd {
 	if it.pin != nil {
 		return m.pinPR(*it.pin)
 	}
+	if it.fold {
+		if m.Expanded == nil {
+			m.Expanded = map[string]bool{}
+		}
+		m.Expanded[foldKey] = !m.Expanded[foldKey]
+		m.clampReveal()
+		return nil
+	}
 	m.toggleThread(it)
 	return nil
 }
@@ -201,7 +209,11 @@ func (m *Model) openSelected() tea.Cmd {
 }
 
 func (m *Model) selectedURL() string {
-	if it, ok := m.selected(); ok && it.url != "" {
+	it, ok := m.selected()
+	if ok && it.fold {
+		return ""
+	}
+	if ok && it.url != "" {
 		return it.url
 	}
 	if m.Snapshot.PR != nil {
