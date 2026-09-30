@@ -57,11 +57,13 @@ func footerLine(w int, hints []footerHint) string {
 }
 
 // rowTarget maps a rendered screen row to what a click on it selects. Tab
-// labels also constrain the column span; body rows accept any column (x1 < 0).
+// labels and the PR number also constrain the column span; body rows and the
+// title accept any column (x1 < 0). A target with a url opens it on click.
 type rowTarget struct {
 	y, x0, x1 int
 	tab       model.Section
 	item      int
+	url       string
 }
 
 // bodyItem is one selectable entity in the body: a check, the CI fold row, a
@@ -146,7 +148,7 @@ func (m *Model) layoutView() (string, []rowTarget) {
 	head := fitHeader(m.headerLines(w), budget)
 	out := make([]string, 0, h)
 	for i, l := range head {
-		for _, t := range l.tabs {
+		for _, t := range l.targets {
 			t.y = i
 			rows = append(rows, t)
 		}
@@ -178,9 +180,9 @@ func pad(out []string, w, h int) []string {
 }
 
 type headerLine struct {
-	text string
-	prio int
-	tabs []rowTarget
+	text    string
+	prio    int
+	targets []rowTarget
 }
 
 // Header priorities: 0 never drops, higher numbers are dropped first when the
@@ -196,15 +198,20 @@ func (m *Model) headerLines(w int) []headerLine {
 	s := m.Snapshot
 	out := m.identityLines(w)
 	add := func(prio int, text string) { out = append(out, headerLine{text: text, prio: prio}) }
+	// Every title line opens the pull request, like the number on line 1.
+	var open []rowTarget
+	if s.PR != nil {
+		open = []rowTarget{{x1: -1, item: -1, url: s.PR.URL}}
+	}
 	for _, l := range styleWrapped(pal.bold, clean(s.Title), w) {
-		add(prioTitle, l)
+		out = append(out, headerLine{text: l, prio: prioTitle, targets: open})
 	}
 	for _, l := range wrapSpans(m.metaSpans(), w) {
 		add(prioCounts, l)
 	}
 	add(prioBlank, "")
 	text, spans := tabLine(m.Section)
-	out = append(out, headerLine{text: text, tabs: spans})
+	out = append(out, headerLine{text: text, targets: spans})
 	for _, l := range m.errorLines(w) {
 		add(prioError, l)
 	}
@@ -221,12 +228,16 @@ func (m *Model) identityLines(w int) []headerLine {
 	if s.PR == nil {
 		return m.titleLines(w)
 	}
-	left := badge(prState(s)) + " " + styled(pal.bold, fmt.Sprintf("#%d", s.PR.Number))
+	b, number := badge(prState(s)), fmt.Sprintf("#%d", s.PR.Number)
+	left := b + " " + styled(pal.bold, number)
 	leftW := ansi.StringWidth(left)
+	// A click on the number opens the pull request.
+	x0 := ansi.StringWidth(b) + 1
+	open := []rowTarget{{x0: x0, x1: min(x0+len(number), w), item: -1, url: s.PR.URL}}
 	status := m.statusSpans()
 	statusW := ansi.StringWidth(spanText(status))
 	if statusW > 0 && leftW+1+statusW > w {
-		out := []headerLine{{text: ansi.Truncate(left, w, "…")}}
+		out := []headerLine{{text: ansi.Truncate(left, w, "…"), targets: open}}
 		for _, l := range wrapSpans(status, w) {
 			out = append(out, headerLine{text: l, prio: prioError})
 		}
@@ -242,9 +253,9 @@ func (m *Model) identityLines(w int) []headerLine {
 		leftW += 2 + ansi.StringWidth(shown)
 	}
 	if statusW == 0 {
-		return []headerLine{{text: left}}
+		return []headerLine{{text: left, targets: open}}
 	}
-	return []headerLine{{text: left + strings.Repeat(" ", w-leftW-statusW) + renderSpans(status)}}
+	return []headerLine{{text: left + strings.Repeat(" ", w-leftW-statusW) + renderSpans(status), targets: open}}
 }
 
 // metaSpans is the author and the size of the change.

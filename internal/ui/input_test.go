@@ -433,3 +433,42 @@ func TestClickAndOpenOnAStackRow(t *testing.T) {
 		t.Fatalf("clicking a stack row must fetch it once: %+v", api.pinned)
 	}
 }
+
+func TestClickOnTitleOrNumberOpensThePR(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 44 // the title wraps onto two lines
+	var opened []string
+	m.Open = func(u string) error { opened = append(opened, u); return nil }
+	lines := strings.Split(plainView(m), "\n")
+	at := func(want string) (int, int) {
+		for y, l := range lines {
+			if x := strings.Index(l, want); x >= 0 {
+				return len([]rune(l[:x])), y
+			}
+		}
+		t.Fatalf("no %q in:\n%s", want, strings.Join(lines, "\n"))
+		return 0, 0
+	}
+	for _, want := range []string{"#3630", "Re-request", "reviewer list"} {
+		x, y := at(want)
+		finish(m, apply(m, click(x+1, y)))
+	}
+	pr := m.Snapshot.PR.URL
+	if len(opened) != 3 || opened[0] != pr || opened[1] != pr || opened[2] != pr {
+		t.Fatalf("title and number clicks must open %s, got %v", pr, opened)
+	}
+	for _, want := range []string{"OPEN", "acme/service", "12s ago", "@author"} {
+		x, y := at(want)
+		finish(m, apply(m, click(x+1, y)))
+	}
+	if len(opened) != 3 {
+		t.Fatalf("other header clicks must open nothing, got %v", opened)
+	}
+	m.Snapshot.PR.URL = "javascript:alert(1)"
+	x, y := at("Re-request")
+	finish(m, apply(m, click(x+1, y)))
+	if len(opened) != 3 {
+		t.Fatalf("a non-web PR URL must be ignored, got %v", opened)
+	}
+}

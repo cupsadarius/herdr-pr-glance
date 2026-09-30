@@ -170,6 +170,9 @@ func (m *Model) handleMouse(e tea.Mouse) tea.Cmd {
 		if r.y != e.Y || (r.x1 >= 0 && (e.X < r.x0 || e.X >= r.x1)) {
 			continue
 		}
+		if r.url != "" {
+			return m.openURL(r.url)
+		}
 		if r.tab != "" {
 			m.ShowHelp = false
 			return selectSection(r.tab)
@@ -198,8 +201,12 @@ func (m *Model) openSelected() tea.Cmd {
 	if m.Open == nil {
 		return nil
 	}
-	raw := m.selectedURL()
-	if raw == "" {
+	return m.openURL(m.selectedURL())
+}
+
+// openURL opens a web URL through the host; anything else is ignored.
+func (m *Model) openURL(raw string) tea.Cmd {
+	if m.Open == nil || raw == "" {
 		return nil
 	}
 	u, err := url.Parse(raw)

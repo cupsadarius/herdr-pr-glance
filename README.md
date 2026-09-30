@@ -123,6 +123,7 @@ closes.
 | `\` | Return to the branch's own pull request |
 | `r` | Refresh the active section, ignoring cache freshness |
 | `o` | Open the selected item's URL, falling back to the PR URL; does nothing on the CI fold row |
+| Click the PR title or number | Open the pull request in the browser |
 | `z` | Toggle pane zoom through Herdr |
 | `?` | Help: the full key list; `?` or Escape closes it |
 | `q`, Escape or `ctrl+c` | Close Glance (Escape closes help first when it is open) |

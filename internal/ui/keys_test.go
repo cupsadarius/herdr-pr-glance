@@ -107,7 +107,7 @@ func TestHelpMouse(t *testing.T) {
 	m.ShowHelp = true
 	_, rows := m.layoutView()
 	for _, r := range rows {
-		if r.tab == "" {
+		if r.item >= 0 {
 			t.Fatalf("help must emit no body row targets, got %+v", r)
 		}
 	}
