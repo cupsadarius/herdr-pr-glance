@@ -59,3 +59,18 @@ func (k keyMap) FullHelp() [][]bkey.Binding {
 		{k.Next, k.Prev, k.Unpin},
 	}
 }
+
+// footerHints pairs the short-help bindings with drop ranks: the higher the
+// rank, the sooner a hint goes when the pane is too narrow. q close has rank
+// zero and footerLine never drops the last hint, so quitting stays visible.
+func (k keyMap) footerHints(stacked bool) []footerHint {
+	hint := func(b bkey.Binding, drop int) footerHint {
+		h := b.Help()
+		return footerHint{text: h.Key + " " + h.Desc, drop: drop}
+	}
+	hints := []footerHint{hint(k.Refresh, 4), hint(k.Open, 5), hint(k.Zoom, 3), hint(k.Help, 1), hint(k.Quit, 0)}
+	if stacked {
+		hints = append([]footerHint{hint(k.Stack, 2)}, hints...)
+	}
+	return hints
+}

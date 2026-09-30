@@ -170,3 +170,27 @@ func TestHelpKeepsTabsAndFitsHeight(t *testing.T) {
 	}
 	assertBounds(t, m.View().Content, 44, 24)
 }
+
+func TestFooterDropOrder(t *testing.T) {
+	for _, tc := range []struct {
+		stacked bool
+		w       int
+		want    string
+	}{
+		{false, 100, "r refresh  o browser  z zoom  ? help  q close"},
+		{false, 41, "r refresh o browser z zoom ? help q close"},
+		{false, 31, "r refresh z zoom ? help q close"},
+		{false, 21, "z zoom ? help q close"},
+		{false, 14, "? help q close"},
+		{false, 7, "q close"},
+		{true, 100, "[ ] stack  r refresh  o browser  z zoom  ? help  q close"},
+		{true, 45, "[ ] stack  r refresh  z zoom  ? help  q close"},
+		{true, 34, "[ ] stack  z zoom  ? help  q close"},
+		{true, 24, "[ ] stack ? help q close"},
+		{true, 20, "? help  q close"},
+	} {
+		if got := footerLine(tc.w, defaultKeys.footerHints(tc.stacked)); got != tc.want {
+			t.Errorf("stacked=%v w=%d: got %q want %q", tc.stacked, tc.w, got, tc.want)
+		}
+	}
+}

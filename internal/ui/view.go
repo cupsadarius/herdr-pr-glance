@@ -31,21 +31,8 @@ type footerHint struct {
 	drop int
 }
 
-// footerHints appear in this order; the higher the drop rank, the sooner a hint
-// is dropped when the pane is too narrow to list them all.
-var footerHints = []footerHint{{"r refresh", 2}, {"o browser", 3}, {"z zoom", 1}, {"q close", 0}}
-
-// stackedHints replace the list while the pull request is stacked: the stack
-// keys are the ones a reader cannot guess, so they outlive zoom and only the
-// browser and refresh hints are shed before them.
-var stackedHints = []footerHint{{"[ ] stack", 1}, {"r refresh", 3}, {"o browser", 4}, {"z zoom", 2}, {"q close", 0}}
-
 // footerLine fits as many control hints as the width allows, closing last.
-func footerLine(w int, stacked bool) string {
-	hints := footerHints
-	if stacked {
-		hints = stackedHints
-	}
+func footerLine(w int, hints []footerHint) string {
 	for {
 		texts := make([]string, len(hints))
 		for i, h := range hints {
@@ -130,7 +117,7 @@ func (m *Model) layoutView() (string, []rowTarget) {
 	if w < minWidth {
 		return styled(pal.faint, narrowText), nil
 	}
-	foot := styleFooter(footerLine(w, m.Snapshot.Stack != nil))
+	foot := styleFooter(footerLine(w, m.bindings().footerHints(m.Snapshot.Stack != nil)))
 	if msg := m.emptyMessage(); msg != "" {
 		out := []string{}
 		for _, l := range m.titleLines(w) {

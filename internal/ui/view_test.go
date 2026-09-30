@@ -477,7 +477,7 @@ func TestOverviewRendersIdentityStatisticsAndChecks(t *testing.T) {
 		"CHECKS", "4 failed", "1 pending", "2 passed",
 		"× unit tests", "× deploy preview", "× e2e", "× migrate", "◷ integration tests",
 		"✓ lint", "✓ build", "· docs", "· vendor", "? mystery",
-		"r refresh  o browser  z zoom  q close",
+		"r refresh  o browser  z zoom  ? help  q close",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
@@ -1005,7 +1005,7 @@ Review: Changes requested
 
 
 
-r refresh  o browser  z zoom  q close`
+r refresh o browser z zoom ? help q close`
 
 const goldenReviews44 = `GLANCE PR                  refreshed 12s ago
 acme/service · feature/retry
@@ -1046,4 +1046,4 @@ Overview  Comments  [Reviews]
 
 
 
-r refresh  o browser  z zoom  q close`
+r refresh o browser z zoom ? help q close`
