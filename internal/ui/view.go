@@ -235,7 +235,7 @@ func (m *Model) identityLines(w int) []headerLine {
 	if statusW > 0 {
 		room -= statusW + 1
 	}
-	if repo := clean(s.PR.Repository); room >= 1 && repo != "" {
+	if repo := clean(s.PR.Repository); room >= 2 && repo != "" {
 		shown := ansi.Truncate(repo, room, "…")
 		left += "  " + styled(pal.faint, shown)
 		leftW += 2 + ansi.StringWidth(shown)

@@ -11,8 +11,9 @@ import (
 )
 
 // palette names only the sixteen ANSI colours (foreground, and background for
-// the state badge) and the attributes every terminal implements, so the view follows the user's own theme instead of
-// imposing one. Bubble Tea downsamples them to the terminal's profile.
+// the state badge) and the attributes every terminal implements, so the view
+// follows the user's own theme instead of imposing one. Bubble Tea downsamples
+// them to the terminal's profile.
 type palette struct {
 	none, bold, faint                 lipgloss.Style
 	red, green, yellow, magenta, cyan lipgloss.Style
@@ -75,7 +76,7 @@ func decisionStyle(s string) lipgloss.Style {
 	}
 }
 
-// prStateStyle colours the lifecycle badge shown next to the PR number.
+// prStateStyle colours the lifecycle dot of a stack entry.
 func prStateStyle(state string) lipgloss.Style {
 	switch state {
 	case "OPEN":

@@ -739,12 +739,11 @@ func TestViewDoesNotMutateModel(t *testing.T) {
 }
 
 // SGR parameters the palette is allowed to emit: bold, faint, underline,
-// reverse and the eight base ANSI foregrounds, all resolved by the terminal's
+// and the eight base ANSI foregrounds, all resolved by the terminal's
 // own theme. Anything else means a hard-coded colour slipped in.
 const (
 	sgrBold    = "1"
 	sgrFaint   = "2"
-	sgrReverse = "7"
 	sgrRed     = "31"
 	sgrGreen   = "32"
 	sgrYellow  = "33"
@@ -916,7 +915,7 @@ var markdownFixtures = map[string]bool{"comments": true, "reviews-open": true, "
 // and proves the width bounds above are asserted on styled output. The state
 // badge is the one place that also uses the eight ANSI backgrounds.
 func TestOnlyThePaletteReachesTheTerminal(t *testing.T) {
-	allowed := map[string]bool{"": true, "0": true, "1": true, "2": true, "4": true, "7": true}
+	allowed := map[string]bool{"": true, "0": true, "1": true, "2": true, "4": true}
 	for n := 30; n <= 37; n++ {
 		allowed[strconv.Itoa(n)] = true
 	}
@@ -1067,14 +1066,15 @@ func TestIdentityLineOverflow(t *testing.T) {
 	overviewFixture(m, *now)
 	m.Width = 30
 	lines := strings.Split(plainView(m), "\n")
-	if !strings.HasPrefix(lines[0], " OPEN  #3630") || !strings.Contains(lines[0], "12s ago") {
+	if !strings.HasPrefix(lines[0], " OPEN  #3630") || !strings.Contains(lines[0], "12s ago") ||
+		strings.Contains(lines[0], "acme/service") {
 		t.Fatalf("at 30 columns the repo gives way, the status stays: %q", lines[0])
 	}
 	m.Width = 20
 	m.CooldownUntil = now.Add(97 * time.Second)
 	plain := plainView(m)
 	lines = strings.Split(plain, "\n")
-	if !strings.HasPrefix(lines[0], " OPEN  #3630") || strings.Contains(lines[0], "acme") {
+	if !strings.HasPrefix(lines[0], " OPEN  #3630") || strings.Contains(lines[0], "acme") || strings.Contains(lines[0], "ago") {
 		t.Fatalf("line 1 keeps badge and number: %q", lines[0])
 	}
 	// The status wraps over several lines at 20 columns, so check its tail.
