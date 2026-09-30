@@ -4,14 +4,16 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
 
-// palette names only the sixteen ANSI colours and the attributes every
-// terminal implements, so the view follows the user's own theme instead of
-// imposing one. Bubble Tea downsamples them to the terminal's profile.
+// palette names only the sixteen ANSI colours (foreground, and background for
+// the state badge) and the attributes every terminal implements, so the view
+// follows the user's own theme instead of imposing one. Bubble Tea downsamples
+// them to the terminal's profile.
 type palette struct {
 	none, bold, faint                 lipgloss.Style
 	red, green, yellow, magenta, cyan lipgloss.Style
@@ -30,8 +32,19 @@ func newPalette() palette {
 	return palette{
 		none: base, bold: bold, faint: faint,
 		red: red, green: green, yellow: yellow, magenta: magenta, cyan: cyan,
-		faintGreen: green.Faint(true), boldCyan: cyan.Bold(true), activeTab: bold.Reverse(true),
+		faintGreen: green.Faint(true), boldCyan: cyan.Bold(true), activeTab: bold.Underline(true),
 	}
+}
+
+// badge renders the PR state as a padded label. Open, merged and closed sit on
+// their ANSI background; draft and unknown stay faint text.
+func badge(state string) string {
+	base := lipgloss.NewStyle().Padding(0, 1)
+	bg := map[string]string{"OPEN": "2", "MERGED": "5", "CLOSED": "1"}
+	if c, ok := bg[state]; ok {
+		return base.Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color(c)).Render(state)
+	}
+	return base.Faint(true).Render(state)
 }
 
 // stateStyle colours a check by its outcome: red for anything that needs
@@ -63,7 +76,7 @@ func decisionStyle(s string) lipgloss.Style {
 	}
 }
 
-// prStateStyle colours the lifecycle badge shown next to the PR number.
+// prStateStyle colours the lifecycle dot of a stack entry.
 func prStateStyle(state string) lipgloss.Style {
 	switch state {
 	case "OPEN":
@@ -219,4 +232,13 @@ func styleFooter(s string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// helpStyles replaces Bubbles' hex defaults with the palette, so the help
+// screen follows the terminal theme like the rest of the pane.
+func helpStyles() help.Styles {
+	return help.Styles{
+		Ellipsis: pal.faint, ShortKey: pal.bold, ShortDesc: pal.faint, ShortSeparator: pal.faint,
+		FullKey: pal.bold, FullDesc: pal.faint, FullSeparator: pal.faint,
+	}
 }

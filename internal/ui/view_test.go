@@ -133,17 +133,17 @@ func TestStackBlockListsEntriesTopFirstAndMarksTheCurrentOne(t *testing.T) {
 	stackFixture(m, *now)
 	m.Width, m.Height = 100, 40
 	plain := plainView(m)
-	if !strings.Contains(plain, "STACK #3710 · 2/3 · base main") {
+	if !strings.Contains(plain, "Stack  #3710 · 2/3 · onto main") {
 		t.Fatalf("missing stack heading:\n%s", plain)
 	}
 	rows := strings.Join(bodyRows(m.View().Content), "\n")
 	top, current, bottom := strings.Index(rows, "#3709"), strings.Index(rows, "#3630"), strings.Index(rows, "#3705")
-	checks := strings.Index(rows, "CHECKS")
-	if top < 0 || current < 0 || bottom < 0 || checks < 0 {
+	ci := strings.Index(rows, "CI  ")
+	if top < 0 || current < 0 || bottom < 0 || ci < 0 {
 		t.Fatalf("stack rows missing:\n%s", rows)
 	}
-	if !(top < current && current < bottom && bottom < checks) {
-		t.Fatalf("stack must render top first, above the checks:\n%s", rows)
+	if !(ci < top && top < current && current < bottom) {
+		t.Fatalf("the stack renders top first, below CI:\n%s", rows)
 	}
 	for _, want := range []string{"review required", "changes requested", "approved"} {
 		if !strings.Contains(plain, want) {
@@ -174,7 +174,7 @@ func TestStackHeadingWithoutAKnownPosition(t *testing.T) {
 	m, now := viewHarness()
 	stackFixture(m, *now)
 	m.Snapshot.StackPosition = 0
-	if !strings.Contains(plainView(m), "STACK #3710 · ?/3 · base main") {
+	if !strings.Contains(plainView(m), "Stack  #3710 · ?/3 · onto main") {
 		t.Fatalf("an unknown position must not read as zero:\n%s", plainView(m))
 	}
 }
@@ -183,7 +183,7 @@ func TestCursorOnTheShownEntryShowsOneMarker(t *testing.T) {
 	m, now := viewHarness()
 	stackFixture(m, *now)
 	m.Width, m.Height = 100, 40
-	m.Cursor = 1 // the shown entry, second row from the top of the stack
+	m.Cursor = 7 // 6 CI items come first; the shown entry is the second stack row
 	row := ansi.Strip(stackRowLine(t, m.View().Content, "#3630"))
 	if !strings.HasPrefix(row, "›") {
 		t.Fatalf("the cursor must still be marked: %q", row)
@@ -198,7 +198,7 @@ func TestStackRowsCarryStateColors(t *testing.T) {
 	stackFixture(m, *now)
 	m.Width, m.Height = 100, 40
 	out := m.View().Content
-	if line := styledLine(t, out, "STACK"); !carries(line, sgrBold) || !carries(line, sgrFaint) {
+	if line := styledLine(t, out, "Stack  #3710"); !carries(line, sgrBold) || !carries(line, sgrFaint) {
 		t.Errorf("the stack heading must be a bold label with a faint rest: %q", line)
 	}
 	for _, tc := range []struct{ number, sgr string }{{"#3705", sgrMagenta}, {"#3630", sgrGreen}, {"#3709", sgrFaint}} {
@@ -225,7 +225,7 @@ func TestStackFooterHint(t *testing.T) {
 	m.Width = 100
 	m.Snapshot.Stack, m.Snapshot.StackPosition = nil, 0
 	plain := plainView(m)
-	if strings.Contains(plain, "[ ] stack") || strings.Contains(plain, "STACK") {
+	if strings.Contains(plain, "[ ] stack") || strings.Contains(plain, "Stack  #") {
 		t.Fatalf("an unstacked pull request must show neither hint nor block:\n%s", plain)
 	}
 }
@@ -275,15 +275,15 @@ func assertBounds(t *testing.T, content string, w, h int) {
 // survivors are strings the narrowest supported pane must still show, so the
 // width bound cannot be satisfied by silently truncating the content away.
 var survivors = map[string][]string{
-	"overview":     {"Re-request", "Overview", "unit tests"},
-	"stack":        {"Re-request", "STACK", "#3705"},
+	"overview":     {"Re-request", "Overview", "unit tests", "CI  "},
+	"stack":        {"Re-request", "Stack  #", "#3705"},
 	"no-checks":    {"Re-request", "Overview", "No checks"},
 	"comments":     {"Re-request", "Comments", "@octocat"},
 	"reviews":      {"Re-request", "Reviews", "handler.go", "view.go"},
 	"reviews-open": {"Re-request", "Reviews", "handler.go", "This needs a guard"},
 	"no-pane":      {"No working pane"},
 	"no-pr":        {"No PR for this branch"},
-	"cooldown":     {"Re-request", "retry in 97s"},
+	"cooldown":     {"Re-request", "97s"},
 }
 
 func TestRenderBoundsAcrossSizes(t *testing.T) {
@@ -471,27 +471,16 @@ func TestOverviewRendersIdentityStatisticsAndChecks(t *testing.T) {
 	m.Width = 100
 	out := plainView(m)
 	for _, want := range []string{
-		"GLANCE PR", "refreshed 12s ago", "acme/service", "feature/retry", "#3630", "OPEN",
-		"Re-request denied approvals", "@author", "feature/retry → main", "143 commits", "8 files",
-		"+284", "-76", "Review: Changes requested", "[Overview]", "Comments", "Reviews",
-		"CHECKS", "4 failed", "1 pending", "2 passed",
-		"× unit tests", "× deploy preview", "× e2e", "× migrate", "◷ integration tests",
-		"✓ lint", "✓ build", "· docs", "· vendor", "? mystery",
-		"r refresh  o browser  z zoom  q close",
+		"12s ago", "acme/service", "#3630", "OPEN",
+		"Re-request denied approvals", "@author", "143 commits", "8 files",
+		"+284", "-76", "Review  changes requested", "Overview", "Comments", "Reviews",
+		"CI  ⠋ 1 running · ✗ 4 failing", "✓ 2 passed",
+		"× unit tests", "× deploy preview", "× e2e", "× migrate", "⠋ integration tests",
+		"r refresh  o browser  z zoom  ? help  q close",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
-	}
-}
-
-func TestForkHeadIdentity(t *testing.T) {
-	m, now := viewHarness()
-	overviewFixture(m, *now)
-	m.Snapshot.HeadRepository = "fork/service"
-	m.Width = 100
-	if out := plainView(m); !strings.Contains(out, "fork/service:feature/retry → main") {
-		t.Fatalf("fork head missing:\n%s", out)
 	}
 }
 
@@ -546,11 +535,11 @@ func TestErrorCooldownStaleAndCacheWarning(t *testing.T) {
 	overviewFixture(m, *now)
 	m.Width = 100
 	m.CooldownUntil = now.Add(97 * time.Second)
-	if out := plainView(m); !strings.Contains(out, "refreshed 12s ago · rate limited, retry in 97s") {
+	if out := plainView(m); !strings.Contains(out, "12s ago · rate limited, retry in 97s") {
 		t.Fatalf("cooldown must keep the refresh age:\n%s", out)
 	}
 	m.Snapshot.FetchedAt = now.Add(-90 * time.Second)
-	if out := plainView(m); !strings.Contains(out, "refreshed 1m ago · stale · rate limited, retry in 97s") {
+	if out := plainView(m); !strings.Contains(out, "1m ago · stale · rate limited, retry in 97s") {
 		t.Fatalf("cooldown must keep the age and the stale marker:\n%s", out)
 	}
 
@@ -724,38 +713,57 @@ func TestDraftDoesNotHideLifecycle(t *testing.T) {
 }
 
 func TestViewDoesNotMutateModel(t *testing.T) {
-	m, now := viewHarness()
-	reviewsFixture(m, *now)
-	m.Expanded["t1"] = true // render reply bodies too, the most work a view does
-	// Capture field values before rendering, including navigation maps. md is
-	// exempt: it is the Markdown memoization cache, which View is allowed to
-	// fill because View is the only place that knows the width. It holds no
-	// state the rest of the program can observe.
-	before := reflect.ValueOf(*m)
-	values := make([]string, before.NumField())
-	for i := range values {
-		values[i] = fmt.Sprintf("%#v", before.Field(i))
-	}
-	m.View()
-	m.View()
-	after := reflect.ValueOf(*m)
-	for i, value := range values {
-		if name := after.Type().Field(i).Name; name == "md" {
-			continue
-		}
-		if got := fmt.Sprintf("%#v", after.Field(i)); got != value {
-			t.Errorf("View changed %s", after.Type().Field(i).Name)
-		}
+	for _, tc := range []struct {
+		name  string
+		setup func(m *Model, now time.Time)
+	}{
+		{"reviews", func(m *Model, now time.Time) {
+			reviewsFixture(m, now)
+			m.Expanded["t1"] = true // render reply bodies too, the most work a view does
+		}},
+		{"overview", func(m *Model, now time.Time) {
+			overviewFixture(m, now)
+			m.Expanded[foldKey] = true
+		}},
+		{"overview help", func(m *Model, now time.Time) {
+			overviewFixture(m, now)
+			m.Expanded[foldKey] = true
+			m.ShowHelp = true
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, now := viewHarness()
+			tc.setup(m, *now)
+			// Capture field values before rendering, including navigation maps.
+			// md is exempt: it is the Markdown memoization cache, which View is
+			// allowed to fill because View is the only place that knows the
+			// width. It holds no state the rest of the program can observe.
+			before := reflect.ValueOf(*m)
+			values := make([]string, before.NumField())
+			for i := range values {
+				values[i] = fmt.Sprintf("%#v", before.Field(i))
+			}
+			m.View()
+			m.View()
+			after := reflect.ValueOf(*m)
+			for i, value := range values {
+				if name := after.Type().Field(i).Name; name == "md" {
+					continue
+				}
+				if got := fmt.Sprintf("%#v", after.Field(i)); got != value {
+					t.Errorf("View changed %s", after.Type().Field(i).Name)
+				}
+			}
+		})
 	}
 }
 
 // SGR parameters the palette is allowed to emit: bold, faint, underline,
-// reverse and the eight base ANSI foregrounds, all resolved by the terminal's
+// and the eight base ANSI foregrounds, all resolved by the terminal's
 // own theme. Anything else means a hard-coded colour slipped in.
 const (
 	sgrBold    = "1"
 	sgrFaint   = "2"
-	sgrReverse = "7"
 	sgrRed     = "31"
 	sgrGreen   = "32"
 	sgrYellow  = "33"
@@ -807,16 +815,30 @@ func TestColorLeavesTheLayoutUnchanged(t *testing.T) {
 	}
 }
 
+func TestBarHiddenInNarrowPanes(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 23
+	if strings.Contains(plainView(m), "━") {
+		t.Fatal("no bar below 24 columns")
+	}
+	m.Width = 24
+	if !strings.Contains(plainView(m), "━") {
+		t.Fatal("bar from 24 columns")
+	}
+}
+
 func TestCheckRowsAndCountsCarryStateColors(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
+	m.Expanded[foldKey] = true
 	m.Width, m.Height = 100, 40
 	out := m.View().Content
 	for _, tc := range []struct{ name, sgr string }{
 		{"unit tests", sgrRed}, {"deploy preview", sgrRed}, {"e2e", sgrRed}, {"migrate", sgrRed},
 		{"integration tests", sgrYellow}, {"lint", sgrGreen}, {"build", sgrGreen},
 		{"docs", sgrFaint}, {"vendor", sgrFaint}, {"mystery", sgrFaint},
-		{"4 failed", sgrRed}, {"1 pending", sgrYellow}, {"CHECKS", sgrBold},
+		{"4 failing", sgrRed}, {"1 running", sgrYellow}, {"CI  ", sgrBold}, {"2 passed", sgrGreen},
 	} {
 		if line := styledLine(t, out, tc.name); !carries(line, tc.sgr) {
 			t.Errorf("%q must carry %q: %q", tc.name, tc.sgr, line)
@@ -834,13 +856,12 @@ func TestHeaderTabsAndFooterCarryTheirStyles(t *testing.T) {
 	m.Snapshot.ReviewDecision = "APPROVED"
 	out := m.View().Content
 	for _, tc := range []struct{ want, sgr string }{
-		{"GLANCE PR", sgrBold}, {"refreshed 12s ago", sgrFaint},
-		{"acme/service", sgrFaint}, {"feature/retry", sgrCyan},
-		{"#3630", sgrBold}, {"OPEN", sgrGreen},
+		{"12s ago", sgrFaint}, {"acme/service", sgrFaint},
+		{"#3630", sgrBold}, {"OPEN", "42"}, {"OPEN", "30"},
 		{"Re-request denied", sgrBold}, {"@author", sgrCyan},
 		{"+284", sgrGreen}, {"-76", sgrRed},
-		{"Review:", sgrFaint}, {"Approved", sgrGreen},
-		{"[Overview]", sgrReverse}, {"[Overview]", sgrBold},
+		{"Review  approved", sgrGreen},
+		{"Overview", "4"}, {"Overview", sgrBold},
 		{"q close", sgrBold}, {"q close", sgrFaint},
 	} {
 		if line := styledLine(t, out, tc.want); !carries(line, tc.sgr) {
@@ -849,10 +870,10 @@ func TestHeaderTabsAndFooterCarryTheirStyles(t *testing.T) {
 	}
 	m.Snapshot.State, m.Snapshot.ReviewDecision = "MERGED", "REVIEW_REQUIRED"
 	out = m.View().Content
-	if line := styledLine(t, out, "MERGED"); !carries(line, sgrMagenta) {
+	if line := styledLine(t, out, "MERGED"); !carries(line, "45") {
 		t.Errorf("a merged PR must be magenta: %q", line)
 	}
-	if line := styledLine(t, out, "Review required"); !carries(line, sgrYellow) {
+	if line := styledLine(t, out, "review required"); !carries(line, sgrYellow) {
 		t.Errorf("a pending review decision must be yellow: %q", line)
 	}
 }
@@ -923,13 +944,17 @@ var markdownFixtures = map[string]bool{"comments": true, "reviews-open": true, "
 
 // TestOnlyThePaletteReachesTheTerminal keeps the view inside the 16 ANSI
 // colours and the four attributes, so it follows the user's terminal theme,
-// and proves the width bounds above are asserted on styled output.
+// and proves the width bounds above are asserted on styled output. The state
+// badge is the one place that also uses the eight ANSI backgrounds.
 func TestOnlyThePaletteReachesTheTerminal(t *testing.T) {
-	allowed := map[string]bool{"": true, "0": true, "1": true, "2": true, "4": true, "7": true}
+	allowed := map[string]bool{"": true, "0": true, "1": true, "2": true, "4": true}
 	for n := 30; n <= 37; n++ {
 		allowed[strconv.Itoa(n)] = true
 	}
 	for n := 90; n <= 97; n++ {
+		allowed[strconv.Itoa(n)] = true
+	}
+	for n := 40; n <= 47; n++ {
 		allowed[strconv.Itoa(n)] = true
 	}
 	_, now := viewHarness()
@@ -965,33 +990,24 @@ func TestOnlyThePaletteReachesTheTerminal(t *testing.T) {
 	}
 }
 
-// Golden renderings captured from main at 3835746, before any styling.
-const goldenOverview44 = `GLANCE PR                  refreshed 12s ago
-acme/service · feature/retry
-
-#3630  OPEN
+// Golden renderings of the redesigned pane, 44 columns wide.
+const goldenOverview44 = ` OPEN  #3630  acme/service           12s ago
 Re-request denied approvals when the
 reviewer list changes
-@author  feature/retry → main
+@author · 143 commits · 8 files · +284 -76
 
-143 commits · 8 files
-+284  -76
-Review: Changes requested
+Overview  Comments  Reviews
 
-[Overview]  Comments  Reviews
-
- CHECKS  4 failed · 1 pending · 2 passed · 1
- neutral · 1 skipped · 1 unknown
+ CI  ⠋ 1 running · ✗ 4 failing
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────
 ›× unit tests                         failed
  × deploy preview                  timed out
  × e2e                             cancelled
  × migrate                   action required
- ◷ integration tests                 pending
- ✓ lint                               passed
- ✓ build                              passed
- · docs                              neutral
- · vendor                            skipped
- ? mystery                           unknown
+ ⠋ integration tests                 pending
+ ▸ ✓ 2 passed · 1 neutral · 1 skipped · 1 u…
+ 
+ Review  changes requested
 
 
 
@@ -1005,21 +1021,23 @@ Review: Changes requested
 
 
 
-r refresh  o browser  z zoom  q close`
 
-const goldenReviews44 = `GLANCE PR                  refreshed 12s ago
-acme/service · feature/retry
 
-#3630  OPEN
+
+
+
+
+
+
+
+r refresh o browser z zoom ? help q close`
+
+const goldenReviews44 = ` OPEN  #3630  acme/service           12s ago
 Re-request denied approvals when the
 reviewer list changes
-@author  feature/retry → main
+@author · 143 commits · 8 files · +284 -76
 
-143 commits · 8 files
-+284  -76
-Review: Changes requested
-
-Overview  Comments  [Reviews]
+Overview  Comments  Reviews
 
  fetched 30s ago
 ›@reviewer  APPROVED
@@ -1046,4 +1064,85 @@ Overview  Comments  [Reviews]
 
 
 
-r refresh  o browser  z zoom  q close`
+
+
+
+
+
+
+
+r refresh o browser z zoom ? help q close`
+
+func TestIdentityLine(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 100
+	first := strings.Split(plainView(m), "\n")[0]
+	if !strings.HasPrefix(first, " OPEN  #3630  acme/service") || !strings.HasSuffix(strings.TrimRight(first, " "), "12s ago") {
+		t.Fatalf("line 1 must be badge, number, repo … age: %q", first)
+	}
+	for state, want := range map[string]string{"OPEN": " OPEN ", "MERGED": " MERGED ", "CLOSED": " CLOSED ", "": " UNKNOWN "} {
+		m.Snapshot.State, m.Snapshot.Draft = state, false
+		if first := strings.Split(plainView(m), "\n")[0]; !strings.HasPrefix(first, want) {
+			t.Errorf("state %q: line 1 %q, want prefix %q", state, first, want)
+		}
+	}
+	m.Snapshot.State, m.Snapshot.Draft = "OPEN", true
+	if first := strings.Split(plainView(m), "\n")[0]; !strings.HasPrefix(first, " DRAFT ") {
+		t.Errorf("draft: %q", first)
+	}
+}
+
+func TestIdentityLineOverflow(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 30
+	lines := strings.Split(plainView(m), "\n")
+	if !strings.HasPrefix(lines[0], " OPEN  #3630") || !strings.Contains(lines[0], "12s ago") ||
+		strings.Contains(lines[0], "acme/service") {
+		t.Fatalf("at 30 columns the repo gives way, the status stays: %q", lines[0])
+	}
+	m.Width = 20
+	m.CooldownUntil = now.Add(97 * time.Second)
+	plain := plainView(m)
+	lines = strings.Split(plain, "\n")
+	if !strings.HasPrefix(lines[0], " OPEN  #3630") || strings.Contains(lines[0], "acme") || strings.Contains(lines[0], "ago") {
+		t.Fatalf("line 1 keeps badge and number: %q", lines[0])
+	}
+	// The status wraps over several lines at 20 columns, so check its tail.
+	if !strings.Contains(plain, "97s") || !strings.Contains(plain, "rate") {
+		t.Fatalf("a status that cannot share line 1 wraps below it:\n%s", plain)
+	}
+}
+
+func TestMetaLineAndTabs(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 100
+	m.Snapshot.Additions = 25365
+	plain := plainView(m)
+	for _, want := range []string{"@author · 143 commits · 8 files · +25k -76", "Overview  Comments  Reviews"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("missing %q in:\n%s", want, plain)
+		}
+	}
+	for _, gone := range []string{"GLANCE PR", "[Overview]", "Review:", "feature/retry → main", "refreshed"} {
+		if strings.Contains(plain, gone) {
+			t.Fatalf("%q must be gone from the PR header:\n%s", gone, plain)
+		}
+	}
+	m.Pinned = &model.PR{Number: 1}
+	if !strings.Contains(strings.Split(plainView(m), "\n")[0], "pinned") {
+		t.Fatal("a pinned PR must say so on line 1")
+	}
+}
+
+func TestSectionLoadingSpinnerIsYellow(t *testing.T) {
+	m, now := viewHarness()
+	commentsFixture(m, *now)
+	m.Discussions[model.Comments].Loading = true
+	line := styledLine(t, m.View().Content, "Loading…")
+	if !carries(line, sgrYellow) || !carries(line, sgrFaint) {
+		t.Errorf("the loading spinner must be yellow and its label faint: %q", line)
+	}
+}

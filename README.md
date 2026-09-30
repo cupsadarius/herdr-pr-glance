@@ -8,29 +8,28 @@ comments and review threads through your authenticated `gh`. It is read-only
 against GitHub: it displays data and opens links.
 
 ```text
- GLANCE PR                  refreshed 12s ago
- acme/service · feature/retry
+ OPEN  #3630  acme/service           12s ago
+Re-request denied approvals when the
+reviewer list changes
+@author · 143 commits · 8 files · +284 -76
 
- #3630  OPEN
- Re-request denied approvals
- @author       feature/retry → main
+Overview  Comments  Reviews
 
- 12 commits  ·  8 files
- +284  -76
- Review: Changes requested
+ CI  ⠋ 1 running · ✗ 4 failing
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────
+›× unit tests                         failed
+ × deploy preview                  timed out
+ × e2e                             cancelled
+ × migrate                   action required
+ ⠋ integration tests                 pending
+ ▸ ✓ 2 passed · 1 neutral · 1 skipped · 1 u…
 
- [Overview]  Comments  Reviews
+ Review  changes requested
 
- CHECKS      1 failed · 1 pending · 2 passed
- × unit tests                         failed
- ◷ integration tests                 pending
- ✓ lint                               passed
- ✓ build                              passed
-
- r refresh  o browser  z zoom  q close
+r refresh o browser z zoom ? help q close
 ```
 
-The mockup shows content and priority, not exact spacing. Content wraps to the
+The mockup is the Overview rendered in a 44-column pane. Content wraps to the
 pane width and follows terminal resizing.
 
 Colour comes from the terminal's 16 ANSI colours, so Glance follows your theme
@@ -116,30 +115,39 @@ closes.
 | Input | Action |
 | --- | --- |
 | `1`, `2`, `3` or click a section | Overview, Comments, Reviews |
-| Arrows / `j`, `k`; Page Up / Down; mouse wheel | Navigate and scroll |
+| `j`, `k` or `↓`, `↑`; `pgup`, `pgdn`; mouse wheel | Navigate and scroll |
+| Enter / click the CI fold row | Show or hide the folded checks |
 | Enter / click a thread | Expand or collapse |
 | Enter / click a stack row | Show that pull request of the stack |
 | `]`, `[` | Move to the stack entry above or below |
 | `\` | Return to the branch's own pull request |
 | `r` | Refresh the active section, ignoring cache freshness |
-| `o` | Open the selected item's URL, falling back to the PR URL |
+| `o` | Open the selected item's URL, falling back to the PR URL; does nothing on the CI fold row |
+| Click the PR title or number | Open the pull request in the browser |
 | `z` | Toggle pane zoom through Herdr |
-| `q`, Escape or `ctrl+c` | Close Glance |
+| `?` | Help: the full key list; `?` or Escape closes it |
+| `q`, Escape or `ctrl+c` | Close Glance (Escape closes help first when it is open) |
 
 Only the up and down arrows are bound; left and right do nothing.
 
 ### Sections
 
-- **Overview** — PR number, title, author, state, branches, exact counts of
-  commits, changed files, additions and deletions, review decision, and CI checks with
-  aggregate counts. An empty check list means "No checks", not "all passed".
+- **Overview** — the header's first line holds the state badge, PR number,
+  repository and refresh age, plus `stale`, `pinned` or rate-limit status when
+  they apply. The title follows, then a meta line: author · commits · files ·
+  `+adds -dels`, with counts from 10,000 shortened (`+25k`, `+1M`). The body
+  starts with CI: failing checks, then running checks, under a coloured bar,
+  with passed, neutral, skipped and unknown checks folded into one row that
+  Enter or a click expands. An empty check list means "No checks", not "all
+  passed". The review decision comes next, then the stack.
 - **Stacks** — when the PR belongs to a GitHub stack, Overview lists the whole
-  stack above the checks, top first, with each entry's number, state, title and
-  review decision, and marks the one on screen. Selecting an entry — Enter, a
-  click, or `]` and `[` — shows and polls that pull request instead of the
-  branch's own; the header then says `pinned` and `\` goes back. Stacks made in
-  the GitHub UI and with `gh stack` are the same thing, and reading one costs no
-  extra request. Stacks larger than 50 entries show the first 50.
+  stack after CI and the review decision, top first, with each entry's number,
+  state, title and review decision, and marks the one on screen. Selecting an
+  entry — Enter, a click, or `]` and `[` — shows and polls that pull request
+  instead of the branch's own; the header then says `pinned` and `\` goes
+  back. Stacks made in the GitHub UI and with `gh stack` are the same thing,
+  and reading one costs no extra request. Stacks larger than 50 entries show
+  the first 50.
 - **Comments** — top-level PR conversation comments, loaded on demand.
 - **Reviews** — submitted reviews and inline review threads, loaded on demand.
   Unresolved threads come first; threads start collapsed.

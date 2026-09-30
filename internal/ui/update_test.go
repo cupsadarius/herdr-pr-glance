@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
@@ -606,5 +607,44 @@ func TestPinningTheBranchPullRequestUnpins(t *testing.T) {
 	}
 	if len(a.pinned) != 1 || m.Snapshot.PR == nil || *m.Snapshot.PR != branch {
 		t.Fatalf("unpinning must refetch through Snapshot: pinned=%+v shown=%+v", a.pinned, m.Snapshot.PR)
+	}
+}
+
+func TestSpinnerTicksOnlyWhileBusy(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now) // has one pending check
+	if !m.busy() {
+		t.Fatal("a pending check makes the pane busy")
+	}
+	apply(m, TickMsg{})
+	if !m.spinning {
+		t.Fatal("the 2s tick must start the spinner while busy")
+	}
+	if cmd := apply(m, spinner.TickMsg{ID: m.spin.ID()}); cmd == nil {
+		t.Fatal("a spinner tick must reschedule while busy")
+	}
+	m.Snapshot.Checks = []model.Check{{Name: "lint", State: model.CheckPassed}}
+	m.Snapshot.CheckCounts = model.CheckCounts{Passed: 1}
+	if cmd := apply(m, spinner.TickMsg{ID: m.spin.ID()}); cmd != nil || m.spinning {
+		t.Fatal("the spinner must stop once nothing is pending")
+	}
+	apply(m, TickMsg{})
+	if m.spinning {
+		t.Fatal("an idle 2s tick must not start the spinner")
+	}
+}
+
+func TestSpinnerStaysIdleInAHiddenTab(t *testing.T) {
+	for _, visible := range []bool{false, true} {
+		m, now := viewHarness()
+		overviewFixture(m, *now) // has one pending check
+		m.Source.Visible = visible
+		if got := m.busy(); got != visible {
+			t.Fatalf("visible=%v: busy() = %v, want %v", visible, got, visible)
+		}
+		apply(m, TickMsg{})
+		if m.spinning != visible {
+			t.Fatalf("visible=%v: the 2s tick left spinning = %v", visible, m.spinning)
+		}
 	}
 }

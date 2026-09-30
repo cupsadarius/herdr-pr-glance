@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	bkey "charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -30,21 +31,8 @@ type footerHint struct {
 	drop int
 }
 
-// footerHints appear in this order; the higher the drop rank, the sooner a hint
-// is dropped when the pane is too narrow to list them all.
-var footerHints = []footerHint{{"r refresh", 2}, {"o browser", 3}, {"z zoom", 1}, {"q close", 0}}
-
-// stackedHints replace the list while the pull request is stacked: the stack
-// keys are the ones a reader cannot guess, so they outlive zoom and only the
-// browser and refresh hints are shed before them.
-var stackedHints = []footerHint{{"[ ] stack", 1}, {"r refresh", 3}, {"o browser", 4}, {"z zoom", 2}, {"q close", 0}}
-
 // footerLine fits as many control hints as the width allows, closing last.
-func footerLine(w int, stacked bool) string {
-	hints := footerHints
-	if stacked {
-		hints = stackedHints
-	}
+func footerLine(w int, hints []footerHint) string {
 	for {
 		texts := make([]string, len(hints))
 		for i, h := range hints {
@@ -69,16 +57,19 @@ func footerLine(w int, stacked bool) string {
 }
 
 // rowTarget maps a rendered screen row to what a click on it selects. Tab
-// labels also constrain the column span; body rows accept any column (x1 < 0).
+// labels and the PR number also constrain the column span; body rows and the
+// title accept any column (x1 < 0). A target with a url opens it on click.
 type rowTarget struct {
 	y, x0, x1 int
 	tab       model.Section
 	item      int
+	url       string
 }
 
-// bodyItem is one selectable entity in the body: a check, a comment, a review
-// or a review thread. Items own the lines they occupy so the row map, the
-// cursor and the scroll offset all agree on the layout.
+// bodyItem is one selectable entity in the body: a check, the CI fold row, a
+// stack entry, a comment, a review or a review thread. Items own the lines
+// they occupy so the row map, the cursor and the scroll offset all agree on
+// the layout.
 type bodyItem struct {
 	// head lines belong to no item: they introduce the group this item starts,
 	// so the cursor and the row map still address the item itself.
@@ -88,6 +79,8 @@ type bodyItem struct {
 	threadID string
 	// pin is the stack entry this row shows, if any; selecting it pins it.
 	pin *model.PR
+	// fold marks the CI summary row; activating it expands the folded checks.
+	fold bool
 }
 
 // View renders the current state without mutating the model.
@@ -129,30 +122,48 @@ func (m *Model) layoutView() (string, []rowTarget) {
 	if w < minWidth {
 		return styled(pal.faint, narrowText), nil
 	}
-	foot := styleFooter(footerLine(w, m.Snapshot.Stack != nil))
+	foot := styleFooter(footerLine(w, m.bindings().footerHints(m.Snapshot.Stack != nil)))
 	if msg := m.emptyMessage(); msg != "" {
 		out := []string{}
 		for _, l := range m.titleLines(w) {
 			out = append(out, l.text)
 		}
 		out = append(out, "")
-		out = append(out, m.errorLines(w)...)
-		out = append(out, styleWrapped(pal.faint, msg, w)...)
+		if m.ShowHelp {
+			for _, l := range m.helpLines() {
+				out = append(out, ansi.Truncate(l, w, "…"))
+			}
+		} else {
+			out = append(out, m.errorLines(w)...)
+			out = append(out, styleWrapped(pal.faint, msg, w)...)
+		}
 		return strings.Join(append(pad(out, w, h), foot), "\n"), rows
 	}
-	head := fitHeader(m.headerLines(w), h-2)
-	lines, spans := renderBody(m.body(m.contentWidth()))
-	markCursor(lines, spans, m.Cursor)
-	bodyHigh := h - len(head) - 1
-	off := clampOffset(m.Offset, len(lines), bodyHigh)
+	var help []string
+	budget := h - 2
+	if m.ShowHelp {
+		help = m.helpLines()
+		budget = max(2, h-1-len(help))
+	}
+	head := fitHeader(m.headerLines(w), budget)
 	out := make([]string, 0, h)
 	for i, l := range head {
-		for _, t := range l.tabs {
+		for _, t := range l.targets {
 			t.y = i
 			rows = append(rows, t)
 		}
 		out = append(out, ansi.Truncate(l.text, w, "…"))
 	}
+	if m.ShowHelp {
+		for _, l := range help {
+			out = append(out, ansi.Truncate(l, w, "…"))
+		}
+		return strings.Join(append(pad(out, w, h), foot), "\n"), rows
+	}
+	lines, spans := renderBody(m.body(m.contentWidth()))
+	markCursor(lines, spans, m.Cursor)
+	bodyHigh := h - len(head) - 1
+	off := clampOffset(m.Offset, len(lines), bodyHigh)
 	for i := off; i < len(lines) && i-off < bodyHigh; i++ {
 		rows = append(rows, rowTarget{y: len(out), x1: -1, item: itemAt(spans, i)})
 		out = append(out, ansi.Truncate(lines[i], w, "…"))
@@ -169,61 +180,94 @@ func pad(out []string, w, h int) []string {
 }
 
 type headerLine struct {
-	text string
-	prio int
-	tabs []rowTarget
+	text    string
+	prio    int
+	targets []rowTarget
 }
 
 // Header priorities: 0 never drops, higher numbers are dropped first when the
 // terminal is too short to show the whole header plus one body row.
 const (
 	prioError = iota + 1
-	prioState
 	prioTitle
-	prioRepo
-	prioAuthor
-	prioReview
 	prioCounts
-	prioDiff
 	prioBlank
 )
 
 func (m *Model) headerLines(w int) []headerLine {
 	s := m.Snapshot
-	out := m.titleLines(w)
+	out := m.identityLines(w)
 	add := func(prio int, text string) { out = append(out, headerLine{text: text, prio: prio}) }
-	addWrapped := func(prio int, style lipgloss.Style, text string) {
-		for _, l := range styleWrapped(style, text, w) {
-			add(prio, l)
-		}
-	}
-	repo := ""
+	// Every title line opens the pull request, like the number on line 1.
+	var open []rowTarget
 	if s.PR != nil {
-		repo = clean(s.PR.Repository)
+		open = []rowTarget{{x1: -1, item: -1, url: s.PR.URL}}
 	}
-	add(prioRepo, styled(pal.faint, repo)+" · "+styled(pal.cyan, clean(m.Source.Branch)))
-	add(prioBlank, "")
-	if s.PR != nil {
-		state := prState(s)
-		add(prioState, styled(pal.bold, fmt.Sprintf("#%d", s.PR.Number))+"  "+styled(prStateStyle(state), state))
+	for _, l := range styleWrapped(pal.bold, clean(s.Title), w) {
+		out = append(out, headerLine{text: l, prio: prioTitle, targets: open})
 	}
-	addWrapped(prioTitle, pal.bold, clean(s.Title))
-	add(prioAuthor, styled(pal.cyan, "@"+clean(s.Author))+"  "+
-		styled(pal.faint, headRef(s))+" → "+styled(pal.faint, clean(s.BaseBranch)))
-	add(prioBlank, "")
-	add(prioCounts, plural(s.Commits, "commit")+" · "+plural(s.ChangedFiles, "file"))
-	add(prioDiff, styled(pal.green, fmt.Sprintf("+%d", s.Additions))+"  "+
-		styled(pal.red, fmt.Sprintf("-%d", s.Deletions)))
-	add(prioReview, styled(pal.faint, "Review: ")+
-		styled(decisionStyle(s.ReviewDecision), reviewDecision(s.ReviewDecision)))
+	for _, l := range wrapSpans(m.metaSpans(), w) {
+		add(prioCounts, l)
+	}
 	add(prioBlank, "")
 	text, spans := tabLine(m.Section)
-	out = append(out, headerLine{text: text, tabs: spans})
+	out = append(out, headerLine{text: text, targets: spans})
 	for _, l := range m.errorLines(w) {
 		add(prioError, l)
 	}
 	add(prioBlank, "")
 	return out
+}
+
+// identityLines is line 1: badge, number and repository on the left, the
+// status on the right. The repository gives way first; a status that still
+// does not fit wraps onto its own lines below, as the empty-state title does.
+// Without a pull request it is the empty-state title itself.
+func (m *Model) identityLines(w int) []headerLine {
+	s := m.Snapshot
+	if s.PR == nil {
+		return m.titleLines(w)
+	}
+	b, number := badge(prState(s)), fmt.Sprintf("#%d", s.PR.Number)
+	left := b + " " + styled(pal.bold, number)
+	leftW := ansi.StringWidth(left)
+	// A click on the number opens the pull request.
+	x0 := ansi.StringWidth(b) + 1
+	open := []rowTarget{{x0: x0, x1: min(x0+len(number), w), item: -1, url: s.PR.URL}}
+	status := m.statusSpans()
+	statusW := ansi.StringWidth(spanText(status))
+	if statusW > 0 && leftW+1+statusW > w {
+		out := []headerLine{{text: ansi.Truncate(left, w, "…"), targets: open}}
+		for _, l := range wrapSpans(status, w) {
+			out = append(out, headerLine{text: l, prio: prioError})
+		}
+		return out
+	}
+	room := w - leftW - 2
+	if statusW > 0 {
+		room -= statusW + 1
+	}
+	if repo := clean(s.PR.Repository); room >= 2 && repo != "" {
+		shown := ansi.Truncate(repo, room, "…")
+		left += "  " + styled(pal.faint, shown)
+		leftW += 2 + ansi.StringWidth(shown)
+	}
+	if statusW == 0 {
+		return []headerLine{{text: left, targets: open}}
+	}
+	return []headerLine{{text: left + strings.Repeat(" ", w-leftW-statusW) + renderSpans(status), targets: open}}
+}
+
+// metaSpans is the author and the size of the change.
+func (m *Model) metaSpans() []span {
+	s := m.Snapshot
+	return []span{
+		{text: "@" + clean(s.Author), style: pal.cyan},
+		{text: " · " + plural(s.Commits, "commit") + " · " + plural(s.ChangedFiles, "file") + " · ", style: pal.faint},
+		{text: "+" + compact(s.Additions), style: pal.green},
+		{text: " ", style: pal.none},
+		{text: "-" + compact(s.Deletions), style: pal.red},
+	}
 }
 
 func fitHeader(lines []headerLine, budget int) []headerLine {
@@ -258,7 +302,7 @@ func tabLine(active model.Section) (string, []rowTarget) {
 		}
 		label, style := t.label, pal.faint
 		if t.section == active {
-			label, style = "["+label+"]", pal.activeTab
+			style = pal.activeTab
 		}
 		b.WriteString(styled(style, label))
 		spans = append(spans, rowTarget{x0: x, x1: x + ansi.StringWidth(label), tab: t.section, item: -1})
@@ -280,7 +324,7 @@ func (m *Model) statusSpans() []span {
 	}
 	switch {
 	case !m.Snapshot.FetchedAt.IsZero():
-		add(pal.faint, "refreshed "+ago(now.Sub(m.Snapshot.FetchedAt))+" ago")
+		add(pal.faint, ago(now.Sub(m.Snapshot.FetchedAt))+" ago")
 		if m.SummaryStale() {
 			add(pal.yellow, "stale")
 		}
@@ -384,22 +428,6 @@ func prState(s model.Snapshot) string {
 	return strings.ToUpper(clean(s.State))
 }
 
-func headRef(s model.Snapshot) string {
-	head := clean(s.HeadBranch)
-	if repo := clean(s.HeadRepository); repo != "" && s.PR != nil && repo != s.PR.Repository {
-		return repo + ":" + head
-	}
-	return head
-}
-
-func reviewDecision(s string) string {
-	r := []rune(strings.ToLower(strings.ReplaceAll(clean(s), "_", " ")))
-	if len(r) == 0 {
-		return "unavailable"
-	}
-	return strings.ToUpper(string(r[0])) + string(r[1:])
-}
-
 // body returns the lead lines, the selectable items and the trailing lines of
 // the active section, laid out for the given content width.
 func (m *Model) body(w int) ([]string, []bodyItem, []string) {
@@ -415,48 +443,61 @@ func (m *Model) body(w int) ([]string, []bodyItem, []string) {
 	}
 }
 
+// overviewBody lays out CI, then the review decision, then the stack. Lines
+// that introduce a group ride on the next item as its head, so the cursor and
+// the row map skip them; whatever is left over trails the last item.
 func (m *Model) overviewBody(w int) ([]string, []bodyItem, []string) {
-	s := m.Snapshot
-	lead, items, gap := m.stackBody(w)
-	if len(s.Checks) == 0 {
-		return lead, items, append(gap, styled(pal.bold, "CHECKS"), styled(pal.faint, "No checks"))
+	paneW, _ := m.size()
+	var items []bodyItem
+	var pending []string
+	add := func(it bodyItem) {
+		it.head = append(pending, it.head...)
+		pending = nil
+		items = append(items, it)
 	}
-	heading := []span{{text: "CHECKS", style: pal.bold}, {text: "  ", style: pal.none}}
-	head := append(gap, wrapSpans(append(heading, countsSpans(s.CheckCounts)...), w)...)
-	for i, c := range s.Checks {
-		item := bodyItem{lines: []string{checkRow(c, w)}, url: c.URL}
-		if i == 0 {
-			item.head = head
+	head, ci := m.ciBlock(w, paneW)
+	pending = append(pending, head...)
+	for _, it := range ci {
+		add(it)
+	}
+	pending = append(pending, "", m.reviewLine(w))
+	if s := m.Snapshot.Stack; s != nil {
+		pending = append(pending, "", m.stackHeading(w))
+		for i := len(s.Entries) - 1; i >= 0; i-- {
+			e := s.Entries[i]
+			pin := e.PR
+			// The cursor gutter already points at the row it selects, so the
+			// entry marker stands down there. The index is the item's place in
+			// the whole body, which now starts with the CI rows.
+			add(bodyItem{lines: []string{m.stackRow(e, w, m.Cursor == len(items))}, url: e.PR.URL, pin: &pin})
 		}
-		items = append(items, item)
+		if hidden := s.Size - len(s.Entries); hidden > 0 {
+			pending = append(pending, styled(pal.faint, fmt.Sprintf("+%d more", hidden)))
+		}
 	}
-	return lead, items, nil
+	return nil, items, pending
 }
 
-// stackBody renders the stack this pull request belongs to: a heading, then one
-// row per entry with the top of the stack first, as GitHub shows it. The rows
-// are selectable so the cursor, a click and `o` all address a single entry.
-func (m *Model) stackBody(w int) ([]string, []bodyItem, []string) {
+// reviewLine states the review decision in words.
+func (m *Model) reviewLine(w int) string {
+	text := "no decision yet"
+	switch strings.ToUpper(strings.ReplaceAll(clean(m.Snapshot.ReviewDecision), " ", "_")) {
+	case "APPROVED":
+		text = "approved"
+	case "CHANGES_REQUESTED":
+		text = "changes requested"
+	case "REVIEW_REQUIRED":
+		text = "review required"
+	}
+	return truncateSpans([]span{{text: "Review", style: pal.bold}, {text: "  ", style: pal.none},
+		{text: text, style: decisionStyle(m.Snapshot.ReviewDecision)}}, w)
+}
+
+// stackHeading names the stack, the shown entry's position and the trunk.
+func (m *Model) stackHeading(w int) string {
 	s := m.Snapshot
-	if s.Stack == nil {
-		return nil, nil, nil
-	}
-	heading := []span{{text: "STACK", style: pal.bold},
-		{text: fmt.Sprintf(" #%d · %s/%d · base %s", s.Stack.Number, position(s.StackPosition), s.Stack.Size, clean(s.Stack.BaseBranch)), style: pal.faint}}
-	lead := []string{truncateSpans(heading, w)}
-	items := make([]bodyItem, 0, len(s.Stack.Entries))
-	for i := len(s.Stack.Entries) - 1; i >= 0; i-- {
-		e := s.Stack.Entries[i]
-		pin := e.PR
-		// The cursor gutter already points at the row it selects, so the entry
-		// marker stands down there rather than drawing a second arrow.
-		items = append(items, bodyItem{lines: []string{m.stackRow(e, w, m.Cursor == len(items))}, url: e.PR.URL, pin: &pin})
-	}
-	var gap []string
-	if hidden := s.Stack.Size - len(s.Stack.Entries); hidden > 0 {
-		gap = append(gap, styled(pal.faint, fmt.Sprintf("+%d more", hidden)))
-	}
-	return lead, items, append(gap, "")
+	return truncateSpans([]span{{text: "Stack", style: pal.bold}, {text: fmt.Sprintf("  #%d · %s/%d · onto %s",
+		s.Stack.Number, position(s.StackPosition), s.Stack.Size, clean(s.Stack.BaseBranch)), style: pal.faint}}, w)
 }
 
 // stackRow shows one entry: its number, a dot coloured by its lifecycle, its
@@ -527,8 +568,9 @@ func checkGlyph(s model.CheckState) string {
 	}
 }
 
-func checkRow(c model.Check, w int) string {
-	glyph := checkGlyph(c.State)
+func checkRow(c model.Check, w int) string { return checkRowGlyph(c, w, checkGlyph(c.State)) }
+
+func checkRowGlyph(c model.Check, w int, glyph string) string {
 	left := glyph + " " + strings.ReplaceAll(clean(c.Name), "\n", " ")
 	right := strings.ReplaceAll(string(c.State), "_", " ")
 	// Keep a readable name even in the narrowest supported pane.
@@ -550,7 +592,7 @@ func (m *Model) sectionLead(s model.Section) []string {
 	var out []string
 	d := m.Discussions[s]
 	if d == nil || d.Loading {
-		out = append(out, styled(pal.faint, "Loading…"))
+		out = append(out, styled(pal.yellow, m.pendingGlyph())+styled(pal.faint, " Loading…"))
 	}
 	if d != nil && d.Data != nil {
 		age := styled(pal.faint, "fetched "+ago(m.now().Sub(d.Data.FetchedAt))+" ago")
@@ -839,4 +881,23 @@ func ago(d time.Duration) string {
 	default:
 		return strconv.Itoa(int(d/(24*time.Hour))) + "d"
 	}
+}
+
+// helpLines renders each help group as its own block: the pane is too narrow
+// for Bubbles' side-by-side columns.
+func (m *Model) helpLines() []string {
+	var out []string
+	for _, g := range m.bindings().FullHelp() {
+		block := m.help.FullHelpView([][]bkey.Binding{g})
+		if block == "" {
+			continue
+		}
+		if len(out) > 0 {
+			out = append(out, "")
+		}
+		for _, l := range strings.Split(block, "\n") {
+			out = append(out, " "+l)
+		}
+	}
+	return out
 }

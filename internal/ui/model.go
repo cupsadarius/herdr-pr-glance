@@ -5,7 +5,10 @@ import (
 	"context"
 	"time"
 
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
 
@@ -44,17 +47,27 @@ type Model struct {
 	SummaryError, SourceError  error
 	NextSummary, CooldownUntil time.Time
 	// Width and Height come from tea.WindowSizeMsg; Cursor selects a body item
-	// and Offset scrolls the body. Expanded is keyed by review-thread ID so an
-	// expansion survives a refresh that replaces the thread value.
+	// and Offset scrolls the body. Expanded is keyed by review-thread ID, or by
+	// foldKey for the CI fold row, so an expansion survives a refresh that
+	// replaces the thread value.
 	Width, Height  int
 	Cursor, Offset int
 	Expanded       map[string]bool
+	// ShowHelp replaces the body with the full key list; the selection and
+	// scroll position underneath are left alone.
+	ShowHelp bool
 	// Open and Zoom are host actions injected by the launcher; nil means no-op.
 	Open        func(url string) error
 	Zoom        func() error
 	ActionError error
 	// md memoizes Markdown rendering; it is a cache, not observable state.
-	md        *markdown
+	md *markdown
+	// help renders the full key list; it holds only styles.
+	help help.Model
+	// spin animates running checks and loading sections. spinning is true
+	// while a spinner tick is in flight, so only one chain ever runs.
+	spin      spinner.Model
+	spinning  bool
 	resolver  SourceResolver
 	github    GitHub
 	cache     Cache
@@ -74,7 +87,12 @@ func New(r SourceResolver, g GitHub, c Cache, now func() time.Time) *Model {
 		now = time.Now
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Model{md: newMarkdown(), resolver: r, github: g, cache: c, now: now, ctx: ctx, cancel: cancel, Section: model.Overview, Discussions: map[model.Section]*DiscussionState{}, Expanded: map[string]bool{}}
+	m := &Model{md: newMarkdown(), resolver: r, github: g, cache: c, now: now, ctx: ctx, cancel: cancel, Section: model.Overview, Discussions: map[model.Section]*DiscussionState{}, Expanded: map[string]bool{}}
+	m.help = help.New()
+	m.help.Styles = helpStyles()
+	// The spinner renders its bare frame; the span around it picks the colour.
+	m.spin = spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(lipgloss.NewStyle()))
+	return m
 }
 func (m *Model) Init() tea.Cmd { return func() tea.Msg { return TickMsg{} } }
 func (m *Model) SummaryStale() bool {

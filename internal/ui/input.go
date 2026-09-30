@@ -2,8 +2,11 @@ package ui
 
 import (
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
+	bkey "charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
@@ -20,37 +23,50 @@ func selectSection(s model.Section) tea.Cmd {
 
 // handleKey maps a key press to a command, mutating only navigation state.
 func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
-	switch k.String() {
-	case "q", "esc", "ctrl+c":
+	keys := m.bindings()
+	if m.ShowHelp {
+		switch {
+		case bkey.Matches(k, keys.Help), k.String() == "esc":
+			m.ShowHelp = false
+		case bkey.Matches(k, keys.Quit):
+			m.cancel()
+			return tea.Quit
+		}
+		return nil
+	}
+	switch {
+	case bkey.Matches(k, keys.Quit):
 		m.cancel()
 		return tea.Quit
-	case "1":
+	case bkey.Matches(k, keys.Help):
+		m.ShowHelp = true
+	case bkey.Matches(k, keys.Overview):
 		return selectSection(model.Overview)
-	case "2":
+	case bkey.Matches(k, keys.Comments):
 		return selectSection(model.Comments)
-	case "3":
+	case bkey.Matches(k, keys.Reviews):
 		return selectSection(model.Reviews)
-	case "r":
+	case bkey.Matches(k, keys.Refresh):
 		return func() tea.Msg { return RefreshMsg{} }
-	case "o":
+	case bkey.Matches(k, keys.Open):
 		return m.openSelected()
-	case "z":
+	case bkey.Matches(k, keys.Zoom):
 		return runAction(m.Zoom)
-	case "j", "down":
+	case bkey.Matches(k, keys.Down):
 		m.moveCursor(1)
-	case "k", "up":
+	case bkey.Matches(k, keys.Up):
 		m.moveCursor(-1)
-	case "pgdown":
+	case bkey.Matches(k, keys.PageDown):
 		m.scroll(m.bodyHeight())
-	case "pgup":
+	case bkey.Matches(k, keys.PageUp):
 		m.scroll(-m.bodyHeight())
-	case "enter":
+	case bkey.Matches(k, keys.Activate):
 		return m.activate()
-	case "]":
+	case bkey.Matches(k, keys.Next):
 		return m.stackStep(1)
-	case "[":
+	case bkey.Matches(k, keys.Prev):
 		return m.stackStep(-1)
-	case "\\":
+	case bkey.Matches(k, keys.Unpin):
 		return m.unpin()
 	}
 	return nil
@@ -111,7 +127,7 @@ func (m *Model) repin() tea.Cmd {
 }
 
 // activate is what enter and a click do to the selected item: pin a stack
-// entry, or expand a review thread.
+// entry, toggle the CI fold row, or expand a review thread.
 func (m *Model) activate() tea.Cmd {
 	it, ok := m.selected()
 	if !ok {
@@ -119,6 +135,14 @@ func (m *Model) activate() tea.Cmd {
 	}
 	if it.pin != nil {
 		return m.pinPR(*it.pin)
+	}
+	if it.fold {
+		if m.Expanded == nil {
+			m.Expanded = map[string]bool{}
+		}
+		m.Expanded[foldKey] = !m.Expanded[foldKey]
+		m.clampReveal()
+		return nil
 	}
 	m.toggleThread(it)
 	return nil
@@ -128,10 +152,14 @@ func (m *Model) activate() tea.Cmd {
 func (m *Model) handleMouse(e tea.Mouse) tea.Cmd {
 	switch e.Button {
 	case tea.MouseWheelUp:
-		m.scroll(-wheelStep)
+		if !m.ShowHelp {
+			m.scroll(-wheelStep)
+		}
 		return nil
 	case tea.MouseWheelDown:
-		m.scroll(wheelStep)
+		if !m.ShowHelp {
+			m.scroll(wheelStep)
+		}
 		return nil
 	case tea.MouseLeft:
 	default:
@@ -142,7 +170,11 @@ func (m *Model) handleMouse(e tea.Mouse) tea.Cmd {
 		if r.y != e.Y || (r.x1 >= 0 && (e.X < r.x0 || e.X >= r.x1)) {
 			continue
 		}
+		if r.url != "" {
+			return m.openURL(r.url)
+		}
 		if r.tab != "" {
+			m.ShowHelp = false
 			return selectSection(r.tab)
 		}
 		if r.item >= 0 {
@@ -169,8 +201,12 @@ func (m *Model) openSelected() tea.Cmd {
 	if m.Open == nil {
 		return nil
 	}
-	raw := m.selectedURL()
-	if raw == "" {
+	return m.openURL(m.selectedURL())
+}
+
+// openURL opens a web URL through the host; anything else is ignored.
+func (m *Model) openURL(raw string) tea.Cmd {
+	if m.Open == nil || raw == "" {
 		return nil
 	}
 	u, err := url.Parse(raw)
@@ -182,13 +218,53 @@ func (m *Model) openSelected() tea.Cmd {
 }
 
 func (m *Model) selectedURL() string {
-	if it, ok := m.selected(); ok && it.url != "" {
+	it, ok := m.selected()
+	if ok && it.fold {
+		return ""
+	}
+	if ok && it.url != "" {
 		return it.url
 	}
 	if m.Snapshot.PR != nil {
 		return m.Snapshot.PR.URL
 	}
 	return ""
+}
+
+// anchor is a key that names an item across snapshots, so a refresh that
+// reorders the body keeps the selection on the same thing. Empty means none.
+func anchor(it bodyItem) string {
+	switch {
+	case it.fold:
+		return "fold"
+	case it.pin != nil:
+		return "pr:" + it.pin.Repository + "#" + strconv.Itoa(it.pin.Number)
+	}
+	return it.url
+}
+
+// reanchor moves the cursor to the item with the given anchor, if the body
+// still has one. A check that is gone has usually passed and folded away, so
+// the selection falls back to the fold row: the bare index could otherwise
+// land on a stack row, and enter would pin a different pull request.
+func (m *Model) reanchor(want string) {
+	if want == "" {
+		return
+	}
+	_, items, _ := m.body(m.contentWidth())
+	fold := -1
+	for i, it := range items {
+		if anchor(it) == want {
+			m.Cursor = i
+			return
+		}
+		if it.fold {
+			fold = i
+		}
+	}
+	if fold >= 0 && want != "fold" && !strings.HasPrefix(want, "pr:") {
+		m.Cursor = fold
+	}
 }
 
 func (m *Model) selected() (bodyItem, bool) {

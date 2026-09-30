@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
@@ -90,7 +91,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ActionError = x.Err
 		m.clamp()
 	case TickMsg:
-		return m, tea.Batch(m.resolve(), tea.Tick(2*time.Second, func(time.Time) tea.Msg { return TickMsg{} }))
+		cmds := []tea.Cmd{m.resolve(), tea.Tick(2*time.Second, func(time.Time) tea.Msg { return TickMsg{} })}
+		if m.busy() && !m.spinning {
+			m.spinning = true
+			cmds = append(cmds, m.spin.Tick)
+		}
+		return m, tea.Batch(cmds...)
+	case spinner.TickMsg:
+		if !m.busy() {
+			m.spinning = false
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(x)
+		return m, cmd
 	case SourceResult:
 		m.resolving = false
 		if x.Generation != m.Generation {
@@ -132,6 +146,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		old := m.Snapshot.PR
+		// The cursor is an index and the body's shape follows check states,
+		// so remember what is selected and find it again after the swap.
+		var keep string
+		if it, ok := m.selected(); ok {
+			keep = anchor(it)
+		}
 		m.Snapshot = x.Data
 		m.Snapshot.FetchedAt = m.now()
 		// A pinned entry that is no longer in the stack cannot be navigated
@@ -143,6 +163,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.NextSummary = m.now().Add(time.Minute)
 		if (old == nil) != (x.Data.PR == nil) || (old != nil && x.Data.PR != nil && *old != *x.Data.PR) {
 			m.switchPR()
+		} else {
+			m.reanchor(keep)
 		}
 		m.clamp()
 	case CacheResult:
@@ -210,4 +232,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.discussion(m.Section, false)
 	}
 	return m, nil
+}
+
+// busy reports whether anything on screen is still in progress: a running
+// check, or a discussion section being fetched. A hidden tab is never busy:
+// summary polling stops there, so a stale pending check would spin forever.
+func (m *Model) busy() bool {
+	if !m.Source.Visible {
+		return false
+	}
+	if m.Snapshot.CheckCounts.Pending > 0 {
+		return true
+	}
+	for _, d := range m.Discussions {
+		if d != nil && d.Loading {
+			return true
+		}
+	}
+	return false
 }

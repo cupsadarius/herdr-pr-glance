@@ -71,7 +71,7 @@ func TestRefreshKeyEmitsRefreshMsg(t *testing.T) {
 func TestCursorMovementAndPaging(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
-	m.Height = 24
+	m.Height = 14
 	m.View()
 	apply(m, key("j"))
 	apply(m, key("down"))
@@ -85,7 +85,7 @@ func TestCursorMovementAndPaging(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		apply(m, key("j"))
 	}
-	if m.Cursor != len(m.Snapshot.Checks)-1 {
+	if m.Cursor != 5 { // 4 failing, 1 running, then the fold row
 		t.Fatalf("cursor must clamp to the last item, got %d", m.Cursor)
 	}
 	for i := 0; i < 50; i++ {
@@ -177,7 +177,7 @@ func TestClickOnTabSelectsSection(t *testing.T) {
 	lines := strings.Split(content, "\n")
 	y, x := -1, -1
 	for i, l := range lines {
-		if j := strings.Index(l, "Comments"); j >= 0 && strings.Contains(l, "[Overview]") {
+		if j := strings.Index(l, "Comments"); j >= 0 && strings.Contains(l, "Overview") {
 			y, x = i, j+2
 		}
 	}
@@ -200,7 +200,7 @@ func TestClickOnTabSelectsSection(t *testing.T) {
 func TestWheelScrollsBody(t *testing.T) {
 	m, now := viewHarness()
 	overviewFixture(m, *now)
-	m.Height = 24
+	m.Height = 14
 	m.View()
 	apply(m, wheel(8, false))
 	if m.Offset == 0 {
@@ -418,6 +418,7 @@ func TestClickAndOpenOnAStackRow(t *testing.T) {
 	}
 	var opened []string
 	m.Open = func(u string) error { opened = append(opened, u); return nil }
+	m.Cursor = 6 // the first stack row, #3709, follows the 6 CI items
 	finish(m, apply(m, key("o")))
 	if len(opened) != 1 || opened[0] != "https://github.com/acme/service/pull/3709" {
 		t.Fatalf("o on the first stack row must open its URL, got %v", opened)
@@ -430,5 +431,44 @@ func TestClickAndOpenOnAStackRow(t *testing.T) {
 	api := m.github.(*fakeAPI)
 	if len(api.pinned) != 1 || api.pinned[0].Number != 3705 {
 		t.Fatalf("clicking a stack row must fetch it once: %+v", api.pinned)
+	}
+}
+
+func TestClickOnTitleOrNumberOpensThePR(t *testing.T) {
+	m, now := viewHarness()
+	overviewFixture(m, *now)
+	m.Width = 44 // the title wraps onto two lines
+	var opened []string
+	m.Open = func(u string) error { opened = append(opened, u); return nil }
+	lines := strings.Split(plainView(m), "\n")
+	at := func(want string) (int, int) {
+		for y, l := range lines {
+			if x := strings.Index(l, want); x >= 0 {
+				return len([]rune(l[:x])), y
+			}
+		}
+		t.Fatalf("no %q in:\n%s", want, strings.Join(lines, "\n"))
+		return 0, 0
+	}
+	for _, want := range []string{"#3630", "Re-request", "reviewer list"} {
+		x, y := at(want)
+		finish(m, apply(m, click(x+1, y)))
+	}
+	pr := m.Snapshot.PR.URL
+	if len(opened) != 3 || opened[0] != pr || opened[1] != pr || opened[2] != pr {
+		t.Fatalf("title and number clicks must open %s, got %v", pr, opened)
+	}
+	for _, want := range []string{"OPEN", "acme/service", "12s ago", "@author"} {
+		x, y := at(want)
+		finish(m, apply(m, click(x+1, y)))
+	}
+	if len(opened) != 3 {
+		t.Fatalf("other header clicks must open nothing, got %v", opened)
+	}
+	m.Snapshot.PR.URL = "javascript:alert(1)"
+	x, y := at("Re-request")
+	finish(m, apply(m, click(x+1, y)))
+	if len(opened) != 3 {
+		t.Fatalf("a non-web PR URL must be ignored, got %v", opened)
 	}
 }
