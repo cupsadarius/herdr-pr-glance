@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"time"
 
+	bkey "charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/cupsadarius/herdr-pr-glance/internal/model"
 )
@@ -20,37 +21,38 @@ func selectSection(s model.Section) tea.Cmd {
 
 // handleKey maps a key press to a command, mutating only navigation state.
 func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
-	switch k.String() {
-	case "q", "esc", "ctrl+c":
+	keys := m.bindings()
+	switch {
+	case bkey.Matches(k, keys.Quit):
 		m.cancel()
 		return tea.Quit
-	case "1":
+	case bkey.Matches(k, keys.Overview):
 		return selectSection(model.Overview)
-	case "2":
+	case bkey.Matches(k, keys.Comments):
 		return selectSection(model.Comments)
-	case "3":
+	case bkey.Matches(k, keys.Reviews):
 		return selectSection(model.Reviews)
-	case "r":
+	case bkey.Matches(k, keys.Refresh):
 		return func() tea.Msg { return RefreshMsg{} }
-	case "o":
+	case bkey.Matches(k, keys.Open):
 		return m.openSelected()
-	case "z":
+	case bkey.Matches(k, keys.Zoom):
 		return runAction(m.Zoom)
-	case "j", "down":
+	case bkey.Matches(k, keys.Down):
 		m.moveCursor(1)
-	case "k", "up":
+	case bkey.Matches(k, keys.Up):
 		m.moveCursor(-1)
-	case "pgdown":
+	case bkey.Matches(k, keys.PageDown):
 		m.scroll(m.bodyHeight())
-	case "pgup":
+	case bkey.Matches(k, keys.PageUp):
 		m.scroll(-m.bodyHeight())
-	case "enter":
+	case bkey.Matches(k, keys.Activate):
 		return m.activate()
-	case "]":
+	case bkey.Matches(k, keys.Next):
 		return m.stackStep(1)
-	case "[":
+	case bkey.Matches(k, keys.Prev):
 		return m.stackStep(-1)
-	case "\\":
+	case bkey.Matches(k, keys.Unpin):
 		return m.unpin()
 	}
 	return nil
