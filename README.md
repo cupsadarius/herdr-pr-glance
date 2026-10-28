@@ -48,6 +48,10 @@ Runtime:
   `open` subcommands require it and exit with a clear error if it is missing, so
   run them through Herdr rather than directly. `snapshot --cwd PATH` needs no
   Herdr environment and works anywhere.
+- `view --cwd PATH` also runs without Herdr: it shows the pull request of that
+  one checkout, for other multiplexers such as Rex. It keeps its cache in
+  `$XDG_STATE_HOME/herdr-pr-glance` (default `~/.local/state/herdr-pr-glance`),
+  and `z` zooms the pane through `rex zoom` when `REX_BLOCK` is set.
 
 Installation needs all of the above — the hook downloads release assets with
 `gh`, so `gh` must already be authenticated — plus a POSIX shell, `tar`, `gzip`

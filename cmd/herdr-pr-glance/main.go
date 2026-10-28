@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 // version is replaced at release build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: herdr-pr-glance view|open|overlay|snapshot --cwd PATH|version"
+const usage = "usage: herdr-pr-glance view [--cwd PATH]|open|overlay|snapshot --cwd PATH|version"
 
 // actionTimeout bounds the browser and zoom commands the pane triggers.
 const actionTimeout = 10 * time.Second
@@ -44,7 +45,7 @@ func run(args []string, stdout io.Writer) error {
 	defer cancel()
 	switch args[0] {
 	case "view":
-		return view(ctx)
+		return view(ctx, args[1:])
 	case "open":
 		l, err := launcher()
 		if err != nil {
@@ -114,6 +115,59 @@ func launcher() (*herdr.Launcher, error) {
 	}, nil
 }
 
+// viewDir shows one fixed checkout, for multiplexers other than Herdr (such as
+// Rex) that start Glance as a plain pane command. Nothing asks Herdr which pane
+// is focused, so the pane always counts as visible.
+func viewDir(ctx context.Context, cwd string) error {
+	state, err := localStateDir()
+	if err != nil {
+		return err
+	}
+	runner := command.ExecRunner{}
+	action := func(argv ...string) error {
+		ctx, cancel := context.WithTimeout(ctx, actionTimeout)
+		defer cancel()
+		_, err := runner.Run(ctx, "", argv...)
+		return err
+	}
+	resolver := dirResolver{herdr.NewResolver(runner, "", herdr.Invocation{}, "", nil), cwd}
+	m := ui.New(resolver, github.Client{Runner: runner}, cache.New(state), time.Now)
+	m.Open = func(url string) error { return action(browserArgv(url)...) }
+	if block := os.Getenv("REX_BLOCK"); block != "" {
+		m.Zoom = func() error { return action("rex", "zoom", "-b", block) }
+	}
+	_, err = tea.NewProgram(m).Run()
+	return err
+}
+
+type dirResolver struct {
+	*herdr.Resolver
+	cwd string
+}
+
+func (r dirResolver) Resolve(ctx context.Context) (model.Source, error) {
+	s, err := r.Checkout(ctx, model.Source{CWD: r.cwd})
+	s.Visible = true
+	return s, err
+}
+
+// localStateDir is the cache home when Herdr does not provide one.
+func localStateDir() (string, error) {
+	dir := os.Getenv("HERDR_PLUGIN_STATE_DIR")
+	if dir == "" {
+		base := os.Getenv("XDG_STATE_HOME")
+		if base == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			base = filepath.Join(home, ".local", "state")
+		}
+		dir = filepath.Join(base, "herdr-pr-glance")
+	}
+	return dir, os.MkdirAll(dir, 0o755)
+}
+
 // browserArgv opens a link without a shell; the URL is a single argument.
 func browserArgv(url string) []string {
 	if runtime.GOOS == "darwin" {
@@ -148,7 +202,16 @@ func (r excludingResolver) exclude() {
 	r.Resolver.SetRecorded(kept)
 }
 
-func view(ctx context.Context) error {
+func view(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("view", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	cwd := flags.String("cwd", "", "checkout directory to show; runs without Herdr")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *cwd != "" {
+		return viewDir(ctx, *cwd)
+	}
 	i, err := invocation()
 	if err != nil {
 		return err
