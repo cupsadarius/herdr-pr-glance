@@ -181,3 +181,33 @@ func (r fixedRunner) Run(_ context.Context, cwd string, args ...string) (string,
 	}
 	return (command.ExecRunner{}).Run(context.Background(), cwd, args...)
 }
+
+// view --cwd runs without Herdr: the source is the fixed checkout, always
+// visible, and the cache lands under XDG_STATE_HOME.
+func TestDirResolverShowsTheFixedCheckout(t *testing.T) {
+	dir := t.TempDir()
+	r := dirResolver{herdr.NewResolver(command.ExecRunner{}, "", herdr.Invocation{}, "", nil), dir}
+	s, err := r.Resolve(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.CWD != dir || !s.Visible || s.EmptyReason != model.NotGit {
+		t.Fatalf("source = %+v", s)
+	}
+}
+
+func TestLocalStateDirFallsBackToXDGState(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", "")
+	t.Setenv("XDG_STATE_HOME", base)
+	dir, err := localStateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(base, "herdr-pr-glance"); dir != want {
+		t.Fatalf("dir = %q, want %q", dir, want)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal(err)
+	}
+}
