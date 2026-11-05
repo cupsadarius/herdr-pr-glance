@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/cupsadarius/herdr-pr-glance/internal/command"
+	"github.com/cupsadarius/pr-glance/command"
 )
 
 const (
