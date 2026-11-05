@@ -3,16 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/cupsadarius/herdr-pr-glance/internal/command"
 	"github.com/cupsadarius/herdr-pr-glance/internal/herdr"
-	"github.com/cupsadarius/herdr-pr-glance/internal/model"
+	"github.com/cupsadarius/pr-glance/command"
+	"github.com/cupsadarius/pr-glance/model"
 )
 
 func TestVersionAndUnknownSubcommands(t *testing.T) {
@@ -26,7 +23,7 @@ func TestVersionAndUnknownSubcommands(t *testing.T) {
 	if out.String() != "1.2.3-test\n" {
 		t.Fatalf("version output = %q", out.String())
 	}
-	for _, args := range [][]string{{}, {"nope"}, {"snapshot"}, {"snapshot", "--nope"}} {
+	for _, args := range [][]string{{}, {"nope"}, {"snapshot"}, {"snapshot", "--cwd", "."}, {"view", "--cwd", "."}} {
 		out.Reset()
 		if err := run(args, &out); err == nil {
 			t.Fatalf("%v accepted", args)
@@ -34,13 +31,6 @@ func TestVersionAndUnknownSubcommands(t *testing.T) {
 		if out.Len() != 0 {
 			t.Fatalf("%v wrote to stdout: %q", args, out.String())
 		}
-	}
-}
-
-func TestBrowserArgvPassesTheURLAsOneArgument(t *testing.T) {
-	argv := browserArgv("https://example.invalid/a b?x=1&y=2")
-	if len(argv) != 2 || argv[1] != "https://example.invalid/a b?x=1&y=2" {
-		t.Fatalf("argv = %q", argv)
 	}
 }
 
@@ -68,47 +58,6 @@ func TestLauncherPrefersRuntimeEnvironment(t *testing.T) {
 	}
 	if l.TargetPaneID != "w1:p7" || l.TabID != "w1:t1" || l.WorkspaceID != "w1" {
 		t.Fatalf("%+v", l)
-	}
-}
-
-// TestSnapshotOnATemporaryCheckout exercises the diagnosis path end to end with
-// a fake gh on PATH, so no network or credentials are involved.
-func TestSnapshotOnATemporaryCheckout(t *testing.T) {
-	dir := t.TempDir()
-	git := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v %s", args, err, out)
-		}
-	}
-	git("init", "-b", "feature")
-	git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial")
-	bin := t.TempDir()
-	script := "#!/bin/sh\necho 'no pull requests found for branch \"feature\"' >&2\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	var out bytes.Buffer
-	// gh reports no pull request: the summary is empty, not an error.
-	if err := run([]string{"snapshot", "--cwd", dir}, &out); err != nil {
-		t.Fatalf("%v %s", err, out.String())
-	}
-	var decoded struct {
-		Source struct {
-			Branch, Root, EmptyReason string
-		}
-	}
-	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
-		t.Fatalf("%v: %s", err, out.String())
-	}
-	if decoded.Source.Branch != "feature" || decoded.Source.Root == "" {
-		t.Fatalf("source = %+v", decoded.Source)
-	}
-	if !strings.Contains(out.String(), `"EmptyReason": "no_pr"`) {
-		t.Fatalf("summary missing the no-PR state: %s", out.String())
 	}
 }
 
@@ -180,34 +129,4 @@ func (r fixedRunner) Run(_ context.Context, cwd string, args ...string) (string,
 		return r.snapshot, nil
 	}
 	return (command.ExecRunner{}).Run(context.Background(), cwd, args...)
-}
-
-// view --cwd runs without Herdr: the source is the fixed checkout, always
-// visible, and the cache lands under XDG_STATE_HOME.
-func TestDirResolverShowsTheFixedCheckout(t *testing.T) {
-	dir := t.TempDir()
-	r := dirResolver{herdr.NewResolver(command.ExecRunner{}, "", herdr.Invocation{}, "", nil), dir}
-	s, err := r.Resolve(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.CWD != dir || !s.Visible || s.EmptyReason != model.NotGit {
-		t.Fatalf("source = %+v", s)
-	}
-}
-
-func TestLocalStateDirFallsBackToXDGState(t *testing.T) {
-	base := t.TempDir()
-	t.Setenv("HERDR_PLUGIN_STATE_DIR", "")
-	t.Setenv("XDG_STATE_HOME", base)
-	dir, err := localStateDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(base, "herdr-pr-glance"); dir != want {
-		t.Fatalf("dir = %q, want %q", dir, want)
-	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatal(err)
-	}
 }

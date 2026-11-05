@@ -7,6 +7,11 @@ with git, and reads PR identity, statistics, CI checks, review decision,
 comments and review threads through your authenticated `gh`. It is read-only
 against GitHub: it displays data and opens links.
 
+The pane itself lives in [pr-glance](https://github.com/cupsadarius/pr-glance);
+this repository is the Herdr wrapper around it. For Rex, use
+[rex-pr-glance](https://github.com/cupsadarius/rex-pr-glance); for any other
+terminal, the standalone `pr-glance --cwd PATH`.
+
 ```text
  OPEN  #3630  acme/service           12s ago
 Re-request denied approvals when the
@@ -46,12 +51,7 @@ Runtime:
 - `gh`, authenticated (`gh auth login`)
 - `HERDR_PLUGIN_STATE_DIR`, which Herdr sets for plugin commands. The `view` and
   `open` subcommands require it and exit with a clear error if it is missing, so
-  run them through Herdr rather than directly. `snapshot --cwd PATH` needs no
-  Herdr environment and works anywhere.
-- `view --cwd PATH` also runs without Herdr: it shows the pull request of that
-  one checkout, for other multiplexers such as Rex. It keeps its cache in
-  `$XDG_STATE_HOME/herdr-pr-glance` (default `~/.local/state/herdr-pr-glance`),
-  and `z` zooms the pane through `rex zoom` when `REX_BLOCK` is set.
+  run them through Herdr rather than directly.
 
 Installation needs all of the above — the hook downloads release assets with
 `gh`, so `gh` must already be authenticated — plus a POSIX shell, `tar`, `gzip`
@@ -201,7 +201,7 @@ which tab, so reopening focuses the existing pane instead of creating another.
 | Install fails with `unsupported operating system:` or `unsupported architecture:` | Only macOS and Linux, on amd64 and arm64, have prebuilt binaries. Build from source instead. |
 | Install fails with `gzip is required` or `no SHA-256 tool found` | Install `gzip`, and `sha256sum` or `shasum`. |
 | Checksum mismatch | The download did not match the release checksum. Retry; if it repeats, do not use the artifact and report it. |
-| Suspect the plugin, not the pane | Run `bin/herdr-pr-glance snapshot --cwd PATH` outside Herdr to print the resolved source and PR data for a checkout. |
+| Suspect the plugin, not the pane | Run `pr-glance snapshot --cwd PATH` ([pr-glance](https://github.com/cupsadarius/pr-glance)) outside Herdr to print the resolved source and PR data for a checkout. |
 | Nothing appears at all | Check `herdr plugin log list`. |
 
 ## Supported binary targets

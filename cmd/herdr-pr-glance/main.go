@@ -5,30 +5,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"runtime"
-	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"github.com/cupsadarius/herdr-pr-glance/internal/cache"
-	"github.com/cupsadarius/herdr-pr-glance/internal/command"
-	"github.com/cupsadarius/herdr-pr-glance/internal/github"
 	"github.com/cupsadarius/herdr-pr-glance/internal/herdr"
-	"github.com/cupsadarius/herdr-pr-glance/internal/model"
-	"github.com/cupsadarius/herdr-pr-glance/internal/ui"
+	"github.com/cupsadarius/pr-glance/command"
+	"github.com/cupsadarius/pr-glance/glance"
+	"github.com/cupsadarius/pr-glance/model"
 )
 
 // version is replaced at release build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = "usage: herdr-pr-glance view [--cwd PATH]|open|overlay|snapshot --cwd PATH|version"
-
-// actionTimeout bounds the browser and zoom commands the pane triggers.
-const actionTimeout = 10 * time.Second
+const usage = "usage: herdr-pr-glance view|open|overlay|version"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -58,8 +48,6 @@ func run(args []string, stdout io.Writer) error {
 			return err
 		}
 		return l.Overlay(ctx)
-	case "snapshot":
-		return snapshot(ctx, args[1:], stdout)
 	case "version":
 		_, err := fmt.Fprintln(stdout, version)
 		return err
@@ -115,67 +103,6 @@ func launcher() (*herdr.Launcher, error) {
 	}, nil
 }
 
-// viewDir shows one fixed checkout, for multiplexers other than Herdr (such as
-// Rex) that start Glance as a plain pane command. Nothing asks Herdr which pane
-// is focused, so the pane always counts as visible.
-func viewDir(ctx context.Context, cwd string) error {
-	state, err := localStateDir()
-	if err != nil {
-		return err
-	}
-	runner := command.ExecRunner{}
-	action := func(argv ...string) error {
-		ctx, cancel := context.WithTimeout(ctx, actionTimeout)
-		defer cancel()
-		_, err := runner.Run(ctx, "", argv...)
-		return err
-	}
-	resolver := dirResolver{herdr.NewResolver(runner, "", herdr.Invocation{}, "", nil), cwd}
-	m := ui.New(resolver, github.Client{Runner: runner}, cache.New(state), time.Now)
-	m.Open = func(url string) error { return action(browserArgv(url)...) }
-	if block := os.Getenv("REX_BLOCK"); block != "" {
-		m.Zoom = func() error { return action("rex", "zoom", "-b", block) }
-	}
-	_, err = tea.NewProgram(m).Run()
-	return err
-}
-
-type dirResolver struct {
-	*herdr.Resolver
-	cwd string
-}
-
-func (r dirResolver) Resolve(ctx context.Context) (model.Source, error) {
-	s, err := r.Checkout(ctx, model.Source{CWD: r.cwd})
-	s.Visible = true
-	return s, err
-}
-
-// localStateDir is the cache home when Herdr does not provide one.
-func localStateDir() (string, error) {
-	dir := os.Getenv("HERDR_PLUGIN_STATE_DIR")
-	if dir == "" {
-		base := os.Getenv("XDG_STATE_HOME")
-		if base == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
-			}
-			base = filepath.Join(home, ".local", "state")
-		}
-		dir = filepath.Join(base, "herdr-pr-glance")
-	}
-	return dir, os.MkdirAll(dir, 0o755)
-}
-
-// browserArgv opens a link without a shell; the URL is a single argument.
-func browserArgv(url string) []string {
-	if runtime.GOOS == "darwin" {
-		return []string{"open", url}
-	}
-	return []string{"xdg-open", url}
-}
-
 // excludingResolver keeps the resolver's recorded-pane set in step with the
 // launcher's state files, so a second Glance pane in the tab (an overlay beside
 // a split) is never mistaken for the working pane. The set is replaced rather
@@ -203,14 +130,8 @@ func (r excludingResolver) exclude() {
 }
 
 func view(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("view", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	cwd := flags.String("cwd", "", "checkout directory to show; runs without Herdr")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if *cwd != "" {
-		return viewDir(ctx, *cwd)
+	if len(args) > 0 {
+		return fmt.Errorf("view takes no arguments\n%s", usage)
 	}
 	i, err := invocation()
 	if err != nil {
@@ -223,56 +144,16 @@ func view(ctx context.Context, args []string) error {
 	runner := command.ExecRunner{}
 	bin := env("HERDR_BIN_PATH", "herdr")
 	self := os.Getenv("HERDR_PANE_ID")
-	action := func(argv ...string) error {
-		ctx, cancel := context.WithTimeout(ctx, actionTimeout)
-		defer cancel()
-		_, err := runner.Run(ctx, "", argv...)
-		return err
-	}
 	resolver := excludingResolver{herdr.NewResolver(runner, bin, i, self, nil), state, self}
 	resolver.exclude()
-	m := ui.New(resolver, github.Client{Runner: runner}, cache.New(state), time.Now)
-	m.Open = func(url string) error { return action(browserArgv(url)...) }
-	m.Zoom = func() error {
+	zoom := func() error {
 		if self == "" {
 			return errors.New("zoom needs HERDR_PANE_ID")
 		}
-		return action(bin, "pane", "zoom", self, "--toggle")
-	}
-	_, err = tea.NewProgram(m).Run()
-	return err
-}
-
-// snapshot prints one summary for an explicit checkout, for diagnosis outside
-// Herdr. It resolves the directory directly and fetches no discussion.
-func snapshot(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("snapshot", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	cwd := flags.String("cwd", "", "checkout directory to inspect")
-	if err := flags.Parse(args); err != nil {
+		ctx, cancel := context.WithTimeout(ctx, glance.ActionTimeout)
+		defer cancel()
+		_, err := runner.Run(ctx, "", bin, "pane", "zoom", self, "--toggle")
 		return err
 	}
-	if *cwd == "" {
-		return errors.New("snapshot requires --cwd PATH")
-	}
-	runner := command.ExecRunner{}
-	resolver := herdr.NewResolver(runner, "", herdr.Invocation{}, "", nil)
-	source, err := resolver.Checkout(ctx, model.Source{CWD: *cwd})
-	if err != nil {
-		return err
-	}
-	out := struct {
-		Source   model.Source
-		Snapshot *model.Snapshot `json:",omitempty"`
-	}{Source: source}
-	if source.EmptyReason == "" {
-		s, err := (github.Client{Runner: runner}).Snapshot(ctx, source)
-		if err != nil {
-			return err
-		}
-		out.Snapshot = &s
-	}
-	encoder := json.NewEncoder(stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(out)
+	return glance.Run(ctx, glance.Options{Resolver: resolver, StateDir: state, Zoom: zoom})
 }
