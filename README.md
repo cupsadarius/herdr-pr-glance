@@ -3,8 +3,8 @@
 Glance PR is a [Herdr](https://herdr.dev) plugin that shows the GitHub pull
 request for the branch you are working on, in a pane next to your terminal. It
 tracks the working pane in the current tab, resolves its checkout and branch
-with git, and reads PR identity, statistics, CI checks, review decision,
-comments and review threads through your authenticated `gh`. It is read-only
+with git, and reads PR identity, merge readiness, CI checks, reviewers, open
+threads, activity, comments and review threads through your authenticated `gh`. It is read-only
 against GitHub: it displays data and opens links.
 
 The pane itself lives in [pr-glance](https://github.com/cupsadarius/pr-glance);
@@ -17,19 +17,33 @@ terminal, the standalone `pr-glance --cwd PATH`.
 Re-request denied approvals when the
 reviewer list changes
 @author · 143 commits · 8 files · +284 -76
+feature/retry → main
 
 Overview  Comments  Reviews
 
- CI  ⠋ 1 running · ✗ 4 failing
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────
-›× unit tests                         failed
- × deploy preview                  timed out
- × e2e                             cancelled
- × migrate                   action required
- ⠋ integration tests                 pending
- ▸ ✓ 2 passed · 1 neutral · 1 skipped · 1 u…
+ Ready to merge
+ ━━━━━━━━ ━━━━━━━━ ━━━━━━━━ ━━━━━━━━ ━━━━━━━
 
- Review  changes requested
+ ✓ Checks         2 passed
+›  ▸ ✓ 2 passed
+ ✓ Approvals      1 approval
+ ● Conversations  3 unresolved of 3
+ ✓ Branch         up to date with main
+ ✓ Mergeable      no conflicts
+
+ Reviewers ─────────────────────────────────
+ @ana  ✓ approved  2h
+
+ Threads  3 open ───────────────────────────
+ internal/store/query/builder.go
+ ├─ L88   @radu N+1 here, batch the lookups…
+ ╰─ L141  @radu index hint?
+ db/migrate.sql
+ ╰─ file  @ana down migration
+
+ Activity ──────────────────────────────────
+ ↑ 6m  @author pushed 3 commits
+ ✓ 2h  @ana approved
 
 r refresh o browser z zoom ? help q close
 ```
@@ -120,13 +134,13 @@ closes.
 | --- | --- |
 | `1`, `2`, `3` or click a section | Overview, Comments, Reviews |
 | `j`, `k` or `↓`, `↑`; `pgup`, `pgdn`; mouse wheel | Navigate and scroll |
-| Enter / click the CI fold row | Show or hide the folded checks |
+| Enter / click the checks fold row | Show or hide the folded checks |
 | Enter / click a thread | Expand or collapse |
 | Enter / click a stack row | Show that pull request of the stack |
 | `]`, `[` | Move to the stack entry above or below |
 | `\` | Return to the branch's own pull request |
 | `r` | Refresh the active section, ignoring cache freshness |
-| `o` | Open the selected item's URL, falling back to the PR URL; does nothing on the CI fold row |
+| `o` | Open the selected item's URL, falling back to the PR URL; does nothing on the checks fold row |
 | Click the PR title or number | Open the pull request in the browser |
 | `z` | Toggle pane zoom through Herdr |
 | `?` | Help: the full key list; `?` or Escape closes it |
@@ -139,13 +153,20 @@ Only the up and down arrows are bound; left and right do nothing.
 - **Overview** — the header's first line holds the state badge, PR number,
   repository and refresh age, plus `stale`, `pinned` or rate-limit status when
   they apply. The title follows, then a meta line: author · commits · files ·
-  `+adds -dels`, with counts from 10,000 shortened (`+25k`, `+1M`). The body
-  starts with CI: failing checks, then running checks, under a coloured bar,
-  with passed, neutral, skipped and unknown checks folded into one row that
-  Enter or a click expands. An empty check list means "No checks", not "all
-  passed". The review decision comes next, then the stack.
+  `+adds -dels`, with counts from 10,000 shortened (`+25k`, `+1M`), then
+  `head → base`. The body opens with the merge verdict GitHub gives
+  (`mergeStateStatus`): Ready to merge, Blocked, Checking mergeability, or
+  Merge state unavailable when GitHub does not answer.
+  Five conditions follow: Checks, Approvals, Conversations, Branch and
+  Mergeable. A condition is red only when GitHub says it blocks the merge;
+  `(not required)` marks one that does not. When GitHub blocks the merge and
+  no condition is red, the line `blocked by a repository rule` says so.
+  Failing and running checks sit under Checks; passed, neutral, skipped and
+  unknown checks fold into one row that Enter or a click expands. Then come
+  Reviewers, open Threads by file, the stack and Activity; an empty section
+  is left out. `o` on a reviewer, thread or activity row opens it.
 - **Stacks** — when the PR belongs to a GitHub stack, Overview lists the whole
-  stack after CI and the review decision, top first, with each entry's number,
+  stack after the reviewers and threads, top first, with each entry's number,
   state, title and review decision, and marks the one on screen. Selecting an
   entry — Enter, a click, or `]` and `[` — shows and polls that pull request
   instead of the branch's own; the header then says `pinned` and `\` goes

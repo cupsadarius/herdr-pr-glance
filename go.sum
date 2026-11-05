@@ -36,8 +36,8 @@ github.com/clipperhouse/displaywidth v0.11.0 h1:lBc6kY44VFw+TDx4I8opi/EtL9m20WSE
 github.com/clipperhouse/displaywidth v0.11.0/go.mod h1:bkrFNkf81G8HyVqmKGxsPufD3JhNl3dSqnGhOoSD/o0=
 github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=
 github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
-github.com/cupsadarius/pr-glance v0.2.0 h1:a6+3KHLif6sG3QJCNrbKakWcGgFkE1JnfkE80Z4ScXw=
-github.com/cupsadarius/pr-glance v0.2.0/go.mod h1:i48YiDbPb7vqZl1v8JCdhGUlV7bRbZg1VKX4lB05tsY=
+github.com/cupsadarius/pr-glance v0.3.0 h1:BP0AxQzw8KCri44h89JsilFvAiCMSLjR9JAWNSJ/iSk=
+github.com/cupsadarius/pr-glance v0.3.0/go.mod h1:i48YiDbPb7vqZl1v8JCdhGUlV7bRbZg1VKX4lB05tsY=
 github.com/dlclark/regexp2 v1.11.0 h1:G/nrcoOa7ZXlpoa/91N3X7mM3r8eIlMBBJZvsz/mxKI=
 github.com/dlclark/regexp2 v1.11.0/go.mod h1:DHkYz0B9wPfa6wondMfaivmHpzrQ3v9q8cnmRbL6yW8=
 github.com/gorilla/css v1.0.1 h1:ntNaBIghp6JmvWnxbZKANoLyuXTPZ4cAMlo6RyhlbO8=
