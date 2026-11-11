@@ -2,7 +2,7 @@ module github.com/cupsadarius/herdr-pr-glance
 
 go 1.25.8
 
-require github.com/cupsadarius/pr-glance v0.3.0
+require github.com/cupsadarius/pr-glance v0.4.0
 
 require (
 	charm.land/bubbles/v2 v2.2.1 // indirect
